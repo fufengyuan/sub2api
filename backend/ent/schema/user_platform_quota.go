@@ -45,8 +45,9 @@ func (UserPlatformQuota) Fields() []ent.Field {
 				"kimi", "zhipu", "deepseek", "workbuddy", "traework":
 				default:
 					return fmt.Errorf("platform %q is not allowed", s)
-				}
-			}),
+			}
+			return nil
+		}),
 
 		// 日 / 周 / 月 USD 上限：
 		//   nil / not set → 无限额（完全放行）
