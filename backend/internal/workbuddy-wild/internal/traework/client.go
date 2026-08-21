@@ -10,8 +10,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/rockswang/workbuddy-wild/internal/auth"
-	"github.com/rockswang/workbuddy-wild/internal/provider"
+	"github.com/Wei-Shaw/sub2api/backend/internal/workbuddy-wild/internal/auth"
+	"github.com/Wei-Shaw/sub2api/backend/internal/workbuddy-wild/internal/provider"
 )
 
 var sessionDeadMarkers = []string{"login", "token 失效", "token invalid", "session", "unauthorized", "401"}

@@ -8,7 +8,7 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"github.com/rockswang/workbuddy-wild/internal/auth"
+	"github.com/Wei-Shaw/sub2api/backend/internal/workbuddy-wild/internal/auth"
 )
 
 func TestDailyCheckinClaimsWhenNotCheckedIn(t *testing.T) {

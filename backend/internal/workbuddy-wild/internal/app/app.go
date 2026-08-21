@@ -18,15 +18,15 @@ import (
 
 	"github.com/wailsapp/wails/v2/pkg/runtime"
 
-	"github.com/rockswang/workbuddy-wild/internal/auth"
-	"github.com/rockswang/workbuddy-wild/internal/config"
-	"github.com/rockswang/workbuddy-wild/internal/login"
-	logintrae "github.com/rockswang/workbuddy-wild/internal/login_trae"
-	"github.com/rockswang/workbuddy-wild/internal/pool"
-	"github.com/rockswang/workbuddy-wild/internal/provider"
-	"github.com/rockswang/workbuddy-wild/internal/scheduler"
-	"github.com/rockswang/workbuddy-wild/internal/server"
-	"github.com/rockswang/workbuddy-wild/internal/winutil"
+	"github.com/Wei-Shaw/sub2api/backend/internal/workbuddy-wild/internal/auth"
+	"github.com/Wei-Shaw/sub2api/backend/internal/workbuddy-wild/internal/config"
+	"github.com/Wei-Shaw/sub2api/backend/internal/workbuddy-wild/internal/login"
+	logintrae "github.com/Wei-Shaw/sub2api/backend/internal/workbuddy-wild/internal/login_trae"
+	"github.com/Wei-Shaw/sub2api/backend/internal/workbuddy-wild/internal/pool"
+	"github.com/Wei-Shaw/sub2api/backend/internal/workbuddy-wild/internal/provider"
+	"github.com/Wei-Shaw/sub2api/backend/internal/workbuddy-wild/internal/scheduler"
+	"github.com/Wei-Shaw/sub2api/backend/internal/workbuddy-wild/internal/server"
+	"github.com/Wei-Shaw/sub2api/backend/internal/workbuddy-wild/internal/winutil"
 )
 
 // Version 面板展示的版本号。

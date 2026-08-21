@@ -304,7 +304,7 @@ function bind() {
   };
   $("aboutProject").onclick = (e) => {
     e.preventDefault();
-    rt.BrowserOpenURL("https://github.com/rockswang/workbuddy-wild");
+    rt.BrowserOpenURL("https://github.com/Wei-Shaw/sub2api");
   };
 
   // API-Key：点击明文值进入编辑，blur/Enter 即生效，Esc 取消

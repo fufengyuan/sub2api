@@ -15,8 +15,8 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/rockswang/workbuddy-wild/internal/auth"
-	"github.com/rockswang/workbuddy-wild/internal/traework"
+	"github.com/Wei-Shaw/sub2api/backend/internal/workbuddy-wild/internal/auth"
+	"github.com/Wei-Shaw/sub2api/backend/internal/workbuddy-wild/internal/traework"
 )
 
 var ErrPending = errors.New("login pending")

@@ -7,7 +7,7 @@ import (
 	"io"
 	"net/http"
 
-	"github.com/rockswang/workbuddy-wild/internal/auth"
+	"github.com/Wei-Shaw/sub2api/backend/internal/workbuddy-wild/internal/auth"
 )
 
 // Kind 平台标识，同时也是模型名前缀。

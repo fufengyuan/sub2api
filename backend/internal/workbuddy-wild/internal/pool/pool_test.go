@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rockswang/workbuddy-wild/internal/auth"
+	"github.com/Wei-Shaw/sub2api/backend/internal/workbuddy-wild/internal/auth"
 )
 
 func TestPickHighestCredits(t *testing.T) {

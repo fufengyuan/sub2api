@@ -32,7 +32,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/rockswang/workbuddy-wild/internal/provider"
+	"github.com/Wei-Shaw/sub2api/backend/internal/workbuddy-wild/internal/provider"
 )
 
 // SOLOEvent 单条 SOLO SSE 事件（归一化）。

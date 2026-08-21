@@ -20,16 +20,16 @@ import (
 	"github.com/wailsapp/wails/v2/pkg/options/assetserver"
 	"github.com/wailsapp/wails/v2/pkg/options/windows"
 
-	"github.com/rockswang/workbuddy-wild/internal/app"
-	"github.com/rockswang/workbuddy-wild/internal/auth"
-	"github.com/rockswang/workbuddy-wild/internal/config"
-	"github.com/rockswang/workbuddy-wild/internal/pool"
-	"github.com/rockswang/workbuddy-wild/internal/provider"
-	"github.com/rockswang/workbuddy-wild/internal/scheduler"
-	"github.com/rockswang/workbuddy-wild/internal/server"
-	"github.com/rockswang/workbuddy-wild/internal/traework"
-	"github.com/rockswang/workbuddy-wild/internal/upstream"
-	"github.com/rockswang/workbuddy-wild/internal/winutil"
+	"github.com/Wei-Shaw/sub2api/backend/internal/workbuddy-wild/internal/app"
+	"github.com/Wei-Shaw/sub2api/backend/internal/workbuddy-wild/internal/auth"
+	"github.com/Wei-Shaw/sub2api/backend/internal/workbuddy-wild/internal/config"
+	"github.com/Wei-Shaw/sub2api/backend/internal/workbuddy-wild/internal/pool"
+	"github.com/Wei-Shaw/sub2api/backend/internal/workbuddy-wild/internal/provider"
+	"github.com/Wei-Shaw/sub2api/backend/internal/workbuddy-wild/internal/scheduler"
+	"github.com/Wei-Shaw/sub2api/backend/internal/workbuddy-wild/internal/server"
+	"github.com/Wei-Shaw/sub2api/backend/internal/workbuddy-wild/internal/traework"
+	"github.com/Wei-Shaw/sub2api/backend/internal/workbuddy-wild/internal/upstream"
+	"github.com/Wei-Shaw/sub2api/backend/internal/workbuddy-wild/internal/winutil"
 )
 
 //go:embed all:frontend/dist

@@ -12,8 +12,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/rockswang/workbuddy-wild/internal/auth"
-	"github.com/rockswang/workbuddy-wild/internal/provider"
+	"github.com/Wei-Shaw/sub2api/backend/internal/workbuddy-wild/internal/auth"
+	"github.com/Wei-Shaw/sub2api/backend/internal/workbuddy-wild/internal/provider"
 )
 
 // ErrKind 错误分类，pool 据此决定冷却时长。

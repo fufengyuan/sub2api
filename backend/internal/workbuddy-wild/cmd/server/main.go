@@ -11,12 +11,12 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/rockswang/workbuddy-wild/internal/auth"
-	"github.com/rockswang/workbuddy-wild/internal/config"
-	"github.com/rockswang/workbuddy-wild/internal/pool"
-	"github.com/rockswang/workbuddy-wild/internal/scheduler"
-	"github.com/rockswang/workbuddy-wild/internal/server"
-	"github.com/rockswang/workbuddy-wild/internal/upstream"
+	"github.com/Wei-Shaw/sub2api/backend/internal/workbuddy-wild/internal/auth"
+	"github.com/Wei-Shaw/sub2api/backend/internal/workbuddy-wild/internal/config"
+	"github.com/Wei-Shaw/sub2api/backend/internal/workbuddy-wild/internal/pool"
+	"github.com/Wei-Shaw/sub2api/backend/internal/workbuddy-wild/internal/scheduler"
+	"github.com/Wei-Shaw/sub2api/backend/internal/workbuddy-wild/internal/server"
+	"github.com/Wei-Shaw/sub2api/backend/internal/workbuddy-wild/internal/upstream"
 )
 
 func main() {

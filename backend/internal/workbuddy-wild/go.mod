@@ -1,4 +1,4 @@
-module github.com/rockswang/workbuddy-wild
+module github.com/Wei-Shaw/sub2api/backend/internal/workbuddy-wild
 
 go 1.25.0
 

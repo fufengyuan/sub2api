@@ -13,8 +13,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/rockswang/workbuddy-wild/internal/pool"
-	"github.com/rockswang/workbuddy-wild/internal/provider"
+	"github.com/Wei-Shaw/sub2api/backend/internal/workbuddy-wild/internal/pool"
+	"github.com/Wei-Shaw/sub2api/backend/internal/workbuddy-wild/internal/provider"
 )
 
 // Runtime 是一个平台的一组运行时资源：pool + upstream + 静态模型兜底。

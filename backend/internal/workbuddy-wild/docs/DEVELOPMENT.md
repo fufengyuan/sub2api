@@ -7,7 +7,7 @@
 
 - **是什么**：WorkBuddy/CodeBuddy 账号的 OpenAI 兼容代理 + 自动签到 Windows 托盘应用。单进程 = HTTP 代理 + 调度器 + 托盘面板。
 - **技术栈**：Go 1.25+ / Wails v2.14（WebView2 桌面壳）/ energye/systray（托盘）/ 纯静态前端（无 npm）。
-- **模块**：`github.com/rockswang/workbuddy-wild`（模块名别改，import 全量依赖它）。
+- **模块**：`github.com/Wei-Shaw/sub2api/backend/internal/workbuddy-wild`（模块名别改，import 全量依赖它）。
 - **当前平台**：仅 Windows amd64。核心业务纯 Go，可移植；平台耦合集中在 `internal/winutil` 与 `main.go` 的 wails 选项。
 - **状态文件**：`config.json`（配置）、`auths/workbuddy-<uid>.json`（凭证，勿外泄）、`data/state.json`（冷却/签到状态）、`data/app.log`（日志）、`data/webview/`（WebView2 profile）。
 

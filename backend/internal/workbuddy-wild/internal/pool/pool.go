@@ -10,7 +10,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/rockswang/workbuddy-wild/internal/auth"
+	"github.com/Wei-Shaw/sub2api/backend/internal/workbuddy-wild/internal/auth"
 )
 
 // CoolKind 冷却类型。
