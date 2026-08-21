@@ -99,6 +99,7 @@ type Config struct {
 	Idempotency             IdempotencyConfig             `mapstructure:"idempotency"`
 	BatchImage              BatchImageConfig              `mapstructure:"batch_image"`
 	ImageStorage            ImageStorageConfig            `mapstructure:"image_storage"`
+	Checkin                 CheckinConfig                  `mapstructure:"checkin"`
 }
 
 type LogConfig struct {
@@ -273,6 +274,15 @@ func (c *ImageStorageConfig) MissingCredentialKeys() []string {
 	}
 	return missing
 }
+
+// CheckinConfig 定时签到配置。
+type CheckinConfig struct {
+	Enabled        bool     `mapstructure:"enabled"`
+	Times          []string `mapstructure:"times"`             // 签到时间，如 ["09:00", "21:00"]
+	KeepaliveHours []int    `mapstructure:"keepalive_hours"`    // 保活刷新时间（小时）
+	BackoffSeconds int      `mapstructure:"backoff_seconds"`    // 批量签到退避（秒）
+}
+
 
 type LinuxDoConnectConfig struct {
 	Enabled             bool   `mapstructure:"enabled"`

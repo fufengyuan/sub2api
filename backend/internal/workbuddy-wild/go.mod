@@ -4,6 +4,7 @@ go 1.25.0
 
 require (
 	github.com/energye/systray v1.0.3
+	github.com/refraction-networking/utls v1.8.2
 	github.com/wailsapp/wails/v2 v2.14.0
 	golang.org/x/sys v0.47.0
 )
@@ -30,6 +31,8 @@ require (
 	github.com/samber/lo v1.49.1 // indirect
 	github.com/tkrajina/go-reflector v0.5.8 // indirect
 	github.com/valyala/bytebufferpool v1.0.0 // indirect
+	github.com/andybalholm/brotli v1.0.6 // indirect
+	github.com/klauspost/compress v1.17.4 // indirect
 	github.com/valyala/fasttemplate v1.2.2 // indirect
 	github.com/wailsapp/go-webview2 v1.0.22 // indirect
 	github.com/wailsapp/mimetype v1.4.1 // indirect
