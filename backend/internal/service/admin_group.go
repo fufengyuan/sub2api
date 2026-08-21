@@ -267,7 +267,7 @@ func defaultAllowImageGenerationForPlatform(platform string) bool {
 func compositeDefaultModelsListCandidateIDs() []string {
 	seen := make(map[string]struct{})
 	ids := make([]string, 0)
-	for _, platform := range []string{PlatformAnthropic, PlatformGemini, PlatformOpenAI, PlatformAntigravity, PlatformGrok, PlatformKimi, PlatformZhipu, PlatformDeepseek} {
+	for _, platform := range []string{PlatformAnthropic, PlatformGemini, PlatformOpenAI, PlatformAntigravity, PlatformGrok, PlatformKimi, PlatformZhipu, PlatformDeepseek, PlatformWorkBuddy, PlatformTraeWork} {
 		for _, id := range defaultModelsListCandidateIDs(platform) {
 			if _, ok := seen[id]; ok {
 				continue
@@ -609,7 +609,7 @@ func (s *adminServiceImpl) validateFallbackGroup(ctx context.Context, currentGro
 // platform/subscriptionType: 当前分组的有效平台/订阅类型
 // fallbackGroupID: 兜底分组 ID
 func (s *adminServiceImpl) validateFallbackGroupOnInvalidRequest(ctx context.Context, currentGroupID int64, platform, subscriptionType string, fallbackGroupID int64) error {
-	if platform != PlatformAnthropic && platform != PlatformAntigravity {
+	if platform != PlatformAnthropic && platform != PlatformAntigravity && platform != PlatformWorkBuddy && platform != PlatformTraeWork {
 		return fmt.Errorf("invalid request fallback only supported for anthropic or antigravity groups")
 	}
 	if subscriptionType == SubscriptionTypeSubscription {

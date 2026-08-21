@@ -43,7 +43,11 @@
                     ? 'https://cloudcode-pa.googleapis.com'
                     : account.platform === 'grok'
                       ? 'https://api.x.ai/v1'
-                      : 'https://api.anthropic.com'
+                      : account.platform === 'workbuddy'
+                        ? 'https://copilot.tencent.com'
+                        : account.platform === 'traework'
+                          ? 'https://trae-api-cn.mchost.guru'
+                          : 'https://api.anthropic.com'
             "
           />
           <p v-if="baseUrlHint" class="input-hint">{{ baseUrlHint }}</p>
@@ -137,7 +141,11 @@
                     ? 'sk-...'
                     : account.platform === 'grok'
                       ? 'xai-...'
-                      : 'sk-ant-...'
+                      : account.platform === 'workbuddy'
+                        ? 'wb_...'
+                        : account.platform === 'traework'
+                          ? 'tr_...'
+                          : 'sk-ant-...'
             "
           />
           <p class="input-hint">{{ t('admin.accounts.leaveEmptyToKeep') }}</p>
@@ -2882,6 +2890,8 @@ const baseUrlHint = computed(() => {
   if (props.account.platform === 'openai') return t('admin.accounts.openai.baseUrlHint')
   if (props.account.platform === 'gemini') return t('admin.accounts.gemini.baseUrlHint')
   if (props.account.platform === 'grok') return ''
+  if (props.account.platform === 'workbuddy') return ''
+  if (props.account.platform === 'traework') return ''
   return t('admin.accounts.baseUrlHint')
 })
 

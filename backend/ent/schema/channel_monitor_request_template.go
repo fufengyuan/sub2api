@@ -40,8 +40,7 @@ func (ChannelMonitorRequestTemplate) Fields() []ent.Field {
 			MaxLen(100),
 		field.Enum("provider").
 			Values("openai", "anthropic", "gemini", "grok",
-				"antigravity", "kimi", "zhipu", "deepseek"),
-		field.String("api_mode").
+				"antigravity", "kimi", "zhipu", "deepseek", "workbuddy", "traework"),
 			Default("chat_completions").
 			MaxLen(32).
 			Comment("OpenAI request protocol: chat_completions or responses; non-OpenAI uses chat_completions"),

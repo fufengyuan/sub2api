@@ -36,8 +36,7 @@ func (ChannelMonitor) Fields() []ent.Field {
 			MaxLen(100),
 		field.Enum("provider").
 			Values("openai", "anthropic", "gemini", "grok",
-				"antigravity", "kimi", "zhipu", "deepseek"),
-		// check_mode: 'probe' | 'quota' | 'quota_probe'
+				"antigravity", "kimi", "zhipu", "deepseek", "workbuddy", "traework"),
 		//   probe       - LLM 探活（默认，原有行为）
 		//   quota       - 仅查关联账号的用量/余额（零 LLM 成本；endpoint/api_key 可空）
 		//   quota_probe - 探活 + 配额并存（配额快照挂到主模型历史行）

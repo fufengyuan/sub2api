@@ -203,6 +203,35 @@
             DeepSeek
           </button>
         </div>
+        <!-- 国内工具平台行：WorkBuddy / TraeWork -->
+        <div class="mt-2 flex flex-wrap rounded-lg bg-gray-100 p-1 dark:bg-dark-700">
+          <button
+            type="button"
+            @click="selectDomesticToolPlatform('workbuddy')"
+            :class="[
+              'flex flex-1 items-center justify-center gap-2 rounded-md px-4 py-2.5 text-sm font-medium transition-all',
+              form.platform === 'workbuddy'
+                ? 'bg-white text-rose-600 shadow-sm dark:bg-dark-600 dark:text-rose-400'
+                : 'text-gray-600 hover:text-gray-900 dark:text-gray-400 dark:hover:text-gray-200'
+            ]"
+          >
+            <PlatformIcon platform="workbuddy" size="sm" />
+            WorkBuddy
+          </button>
+          <button
+            type="button"
+            @click="selectDomesticToolPlatform('traework')"
+            :class="[
+              'flex flex-1 items-center justify-center gap-2 rounded-md px-4 py-2.5 text-sm font-medium transition-all',
+              form.platform === 'traework'
+                ? 'bg-white text-sky-600 shadow-sm dark:bg-dark-600 dark:text-sky-400'
+                : 'text-gray-600 hover:text-gray-900 dark:text-gray-400 dark:hover:text-gray-200'
+            ]"
+          >
+            <PlatformIcon platform="traework" size="sm" />
+            TraeWork
+          </button>
+        </div>
       </div>
 
       <!-- Account Type Selection (Anthropic) -->
@@ -3820,6 +3849,8 @@ const baseUrlHint = computed(() => {
   if (form.platform === 'openai') return t('admin.accounts.openai.baseUrlHint')
   if (form.platform === 'gemini') return t('admin.accounts.gemini.baseUrlHint')
   if (form.platform === 'grok') return ''
+  if (form.platform === 'workbuddy') return ''
+  if (form.platform === 'traework') return ''
   return t('admin.accounts.baseUrlHint')
 })
 
@@ -3827,6 +3858,8 @@ const apiKeyHint = computed(() => {
   if (form.platform === 'openai') return t('admin.accounts.openai.apiKeyHint')
   if (form.platform === 'gemini') return t('admin.accounts.gemini.apiKeyHint')
   if (form.platform === 'grok') return ''
+  if (form.platform === 'workbuddy') return ''
+  if (form.platform === 'traework') return ''
   return t('admin.accounts.apiKeyHint')
 })
 
@@ -3842,6 +3875,10 @@ const apiKeyBaseUrlPlaceholder = computed(() => {
       return 'https://generativelanguage.googleapis.com'
     case 'grok':
       return 'https://api.x.ai/v1'
+    case 'workbuddy':
+      return 'https://copilot.tencent.com'
+    case 'traework':
+      return 'https://trae-api-cn.mchost.guru'
     default:
       return 'https://api.anthropic.com'
   }
@@ -3855,7 +3892,10 @@ const apiKeyValuePlaceholder = computed(() => {
       return 'AIza...'
     case 'grok':
       return 'xai-...'
-    case 'kimi':
+    case 'workbuddy':
+      return 'wb_...'
+    case 'traework':
+      return 'tr_...'
       return 'sk-...'
     case 'zhipu':
       return '<api-key>.<secret>'
@@ -4031,6 +4071,13 @@ function selectCNPlatform(platform: 'kimi' | 'zhipu' | 'deepseek') {
   }
   apiKeyBaseUrl.value = defaultCNBaseUrl(platform, accountMode.value, apiProtocol.value)
   resetAdaptiveBaseUrls(platform, accountMode.value)
+}
+// 切换国内工具平台（WorkBuddy / TraeWork）：强制 apikey 类型，无协议选项。
+function selectDomesticToolPlatform(platform: 'workbuddy' | 'traework') {
+  form.platform = platform
+  form.type = 'apikey'
+  accountCategory.value = 'apikey'
+  apiKeyBaseUrl.value = ''
 }
 // 账号类型 / 协议变更时同步默认 base url。
 watch(accountMode, (mode, previousMode) => {
