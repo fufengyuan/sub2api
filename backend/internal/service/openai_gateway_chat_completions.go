@@ -74,6 +74,12 @@ func (s *OpenAIGatewayService) ForwardAsChatCompletions(
 		return nil, errors.New("codex_cli_only restriction: only codex official clients are allowed")
 	}
 
+	if isCnUpstreamPlatform(account.Platform) {
+		// 国产多渠道（workbuddy/traework/qoder）：账号池由 CnUpstreamService 持有，
+		// 直调池内健康账号，私有 SSE → OpenAI 兼容，缓存/流量 token 口径计费。
+		return s.forwardCnUpstreamChatCompletions(ctx, c, account, body)
+	}
+
 	if account.Platform == PlatformGrok {
 		if account.IsGrokOAuth() {
 			if eligible, reason := grokChatResponsesBridgeEligibility(body); eligible {
