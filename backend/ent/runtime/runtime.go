@@ -838,8 +838,6 @@ func init() {
 	}()
 	// channelmonitorrequesttemplateDescAPIMode is the schema descriptor for api_mode field.
 	channelmonitorrequesttemplateDescAPIMode := channelmonitorrequesttemplateFields[2].Descriptor()
-	// channelmonitorrequesttemplate.DefaultAPIMode holds the default value on creation for the api_mode field.
-	channelmonitorrequesttemplate.DefaultAPIMode = channelmonitorrequesttemplateDescAPIMode.Default.(string)
 	// channelmonitorrequesttemplate.APIModeValidator is a validator for the "api_mode" field. It is called by the builders before save.
 	channelmonitorrequesttemplate.APIModeValidator = channelmonitorrequesttemplateDescAPIMode.Validators[0].(func(string) error)
 	// channelmonitorrequesttemplateDescDescription is the schema descriptor for description field.

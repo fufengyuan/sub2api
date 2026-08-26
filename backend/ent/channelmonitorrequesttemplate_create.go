@@ -69,14 +69,6 @@ func (_c *ChannelMonitorRequestTemplateCreate) SetAPIMode(v string) *ChannelMoni
 	return _c
 }
 
-// SetNillableAPIMode sets the "api_mode" field if the given value is not nil.
-func (_c *ChannelMonitorRequestTemplateCreate) SetNillableAPIMode(v *string) *ChannelMonitorRequestTemplateCreate {
-	if v != nil {
-		_c.SetAPIMode(*v)
-	}
-	return _c
-}
-
 // SetDescription sets the "description" field.
 func (_c *ChannelMonitorRequestTemplateCreate) SetDescription(v string) *ChannelMonitorRequestTemplateCreate {
 	_c.mutation.SetDescription(v)
@@ -174,10 +166,6 @@ func (_c *ChannelMonitorRequestTemplateCreate) defaults() {
 	if _, ok := _c.mutation.UpdatedAt(); !ok {
 		v := channelmonitorrequesttemplate.DefaultUpdatedAt()
 		_c.mutation.SetUpdatedAt(v)
-	}
-	if _, ok := _c.mutation.APIMode(); !ok {
-		v := channelmonitorrequesttemplate.DefaultAPIMode
-		_c.mutation.SetAPIMode(v)
 	}
 	if _, ok := _c.mutation.Description(); !ok {
 		v := channelmonitorrequesttemplate.DefaultDescription
