@@ -281,6 +281,18 @@ func ProvideCNProviderBalanceService(
 	return NewCNProviderBalanceService(accountRepo, proxyRepo, httpUpstream, cfg)
 }
 
+// ProvideCnUpstreamService 构造多渠道上游服务（workbuddy/traework/qoder）。
+func ProvideCnUpstreamService(accountRepo AccountRepository, cfg *config.Config) *CnUpstreamService {
+	return NewCnUpstreamService(accountRepo, cfg)
+}
+
+// ProvideCnUpstreamSchedulerService 构造并启动签到/保活调度器。
+func ProvideCnUpstreamSchedulerService(cn *CnUpstreamService, cfg *config.Config) *CnUpstreamSchedulerService {
+	svc := NewCnUpstreamSchedulerService(cn, cfg)
+	svc.Start(context.Background())
+	return svc
+}
+
 // ProvideCNProviderBalanceCheckService 构造并启动周期余额/额度检测任务。
 // payg 账号探余额（低余额停调）；coding plan 账号探 5h/weekly 滚动窗口
 // （落 extra 快照供调度阈值评估自动停调）。
@@ -841,6 +853,8 @@ var ProviderSet = wire.NewSet(
 	ProvideCNProviderQuotaService,
 	ProvideCNProviderBalanceService,
 	ProvideCNProviderBalanceCheckService,
+	ProvideCnUpstreamService,
+	ProvideCnUpstreamSchedulerService,
 	ProvideClaudeTokenProvider,
 	NewAntigravityGatewayService,
 	ProvideRateLimitService,

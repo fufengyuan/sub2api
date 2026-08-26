@@ -20,7 +20,8 @@ export const CONCRETE_PLATFORM_OPTIONS = [
   { value: 'zhipu', label: 'Zhipu GLM' },
   { value: 'deepseek', label: 'DeepSeek' },
   { value: 'workbuddy', label: 'WorkBuddy' },
-  { value: 'traework', label: 'TraeWork' }
+  { value: 'traework', label: 'TraeWork' },
+  { value: 'qoder', label: 'Qoder' }
 ] as const satisfies readonly PlatformOption<AccountPlatform>[]
 
 /** Platforms that can own a group. */

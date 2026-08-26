@@ -47,9 +47,10 @@ const (
 	PlatformKimi      = domain.PlatformKimi
 	PlatformZhipu     = domain.PlatformZhipu
 	PlatformDeepseek  = domain.PlatformDeepseek
-	PlatformComposite   = domain.PlatformComposite
-	PlatformWorkBuddy   = domain.PlatformWorkBuddy
-	PlatformTraeWork    = domain.PlatformTraeWork
+	PlatformComposite = domain.PlatformComposite
+	PlatformWorkBuddy = domain.PlatformWorkBuddy
+	PlatformTraeWork  = domain.PlatformTraeWork
+	PlatformQoder     = domain.PlatformQoder
 	// PlatformKiro is retained for unsupported-platform threshold tests and legacy
 	// account rows. Scheduling-threshold evaluation never pauses kiro accounts.
 	PlatformKiro = "kiro"
