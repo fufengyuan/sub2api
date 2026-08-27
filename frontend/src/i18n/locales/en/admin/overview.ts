@@ -951,6 +951,9 @@ export default {
         kimi: 'Kimi',
         zhipu: 'Zhipu GLM',
         deepseek: 'DeepSeek',
+        workbuddy: 'WorkBuddy',
+        traework: 'TraeWork',
+        qoder: 'Qoder',
         composite: 'Composite',
       },
       deleteConfirm:

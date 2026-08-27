@@ -132,6 +132,12 @@ const ratePillClass = computed(() => {
       return 'bg-green-50 text-green-700 dark:bg-green-900/20 dark:text-green-400'
     case 'gemini':
       return 'bg-sky-50 text-sky-700 dark:bg-sky-900/20 dark:text-sky-400'
+    case 'workbuddy':
+      return 'bg-rose-50 text-rose-700 dark:bg-rose-900/20 dark:text-rose-400'
+    case 'traework':
+      return 'bg-sky-50 text-sky-700 dark:bg-sky-900/20 dark:text-sky-400'
+    case 'qoder':
+      return 'bg-amber-50 text-amber-700 dark:bg-amber-900/20 dark:text-amber-400'
     default: // antigravity and others
       return 'bg-violet-50 text-violet-700 dark:bg-violet-900/20 dark:text-violet-400'
   }
