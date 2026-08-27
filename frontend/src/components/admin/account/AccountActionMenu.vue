@@ -41,6 +41,23 @@
               <Icon name="sparkles" size="sm" />
               {{ t('admin.accounts.createSparkShadow') }}
             </button>
+            <!-- 三渠道（WorkBuddy / TraeWork / Qoder）积分与签到 -->
+            <template v-if="isCnUpstreamAccount">
+              <div class="my-1 border-t border-gray-100 dark:border-dark-700"></div>
+              <button @click="$emit('refresh-credits', account); $emit('close')" class="flex w-full items-center gap-2 px-4 py-2 text-sm text-cyan-600 hover:bg-gray-100 dark:hover:bg-dark-700">
+                <Icon name="refresh" size="sm" />
+                {{ t('admin.accounts.cnCredits.refreshCredits') }}
+              </button>
+              <button @click="$emit('credits-detail', account); $emit('close')" class="flex w-full items-center gap-2 px-4 py-2 text-sm text-cyan-600 hover:bg-gray-100 dark:hover:bg-dark-700">
+                <Icon name="chart" size="sm" />
+                {{ t('admin.accounts.cnCredits.creditsDetail') }}
+              </button>
+              <!-- qoder 无签到活动，隐藏手动签到入口 -->
+              <button v-if="hasCheckinActivity" @click="$emit('checkin', account); $emit('close')" class="flex w-full items-center gap-2 px-4 py-2 text-sm text-emerald-600 hover:bg-gray-100 dark:hover:bg-dark-700">
+                <Icon name="check" size="sm" />
+                {{ t('admin.accounts.cnCredits.checkinNow') }}
+              </button>
+            </template>
             <button v-if="supportsPrivacy" @click="$emit('set-privacy', account); $emit('close')" class="flex w-full items-center gap-2 px-4 py-2 text-sm text-emerald-600 hover:bg-gray-100 dark:hover:bg-dark-700">
               <Icon name="shield" size="sm" />
               {{ t('admin.accounts.setPrivacy') }}
@@ -68,7 +85,7 @@ import { Icon } from '@/components/icons'
 import type { Account } from '@/types'
 
 const props = defineProps<{ show: boolean; account: Account | null; position: { top: number; left: number } | null }>()
-const emit = defineEmits(['close', 'test', 'stats', 'schedule', 'duplicate', 'reauth', 'refresh-token', 'recover-state', 'reset-quota', 'set-privacy', 'create-spark-shadow'])
+const emit = defineEmits(['close', 'test', 'stats', 'schedule', 'duplicate', 'reauth', 'refresh-token', 'recover-state', 'reset-quota', 'set-privacy', 'create-spark-shadow', 'refresh-credits', 'credits-detail', 'checkin'])
 const { t } = useI18n()
 const canDuplicate = computed(() => {
   if (!props.account || props.account.parent_account_id != null) return false
@@ -99,6 +116,14 @@ const isShadow = computed(() => props.account?.parent_account_id != null)
 // A "parent" OpenAI OAuth account is one that is NOT itself a shadow (parent_account_id == null)
 const isOpenAIOAuthParent = computed(() => isOpenAIOAuth.value && !isShadow.value)
 const supportsPrivacy = computed(() => (isAntigravityOAuth.value || isOpenAIOAuth.value) && !isShadow.value)
+// 三渠道（WorkBuddy / TraeWork / Qoder）账号：支持积分查询与签到操作。
+const isCnUpstreamAccount = computed(() =>
+  props.account?.platform === 'workbuddy' || props.account?.platform === 'traework' || props.account?.platform === 'qoder'
+)
+// qoder 无签到活动，仅 workbuddy / traework 展示手动签到。
+const hasCheckinActivity = computed(() =>
+  props.account?.platform === 'workbuddy' || props.account?.platform === 'traework'
+)
 const hasQuotaLimit = computed(() => {
   return (props.account?.type === 'apikey' || props.account?.type === 'bedrock') && (
     (props.account?.quota_limit ?? 0) > 0 ||

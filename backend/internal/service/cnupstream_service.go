@@ -4,8 +4,11 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"log"
+	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/cnupstream/auth"
@@ -15,6 +18,7 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/cnupstream/traework"
 	"github.com/Wei-Shaw/sub2api/internal/cnupstream/upstream"
 	"github.com/Wei-Shaw/sub2api/internal/config"
+	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
 )
 
 // cnAccountRepo 是 CnUpstreamService 对账号仓储的最小依赖切片：只消费账号列表，
@@ -41,7 +45,9 @@ type CnUpstreamService struct {
 
 	platforms map[string]*cnUpstreamPlatform
 	// acctRefs uid -> *Account，RefreshToken 后回写凭证用（保留其余字段避免覆盖丢失）。
-	acctRefs map[string]*Account
+	// 调度器与管理端 HTTP 并发访问，mu 保护 map 读写。
+	mu        sync.Mutex
+	acctRefs  map[string]*Account
 }
 
 // NewCnUpstreamService 构建三个平台各自的 Pool + Upstream。
@@ -85,7 +91,9 @@ func (s *CnUpstreamService) ReloadAccounts(ctx context.Context) error {
 		for i := range accounts {
 			a := hydrateAuth(&accounts[i], platform)
 			auths = append(auths, a)
+			s.mu.Lock()
 			s.acctRefs[a.UID] = &accounts[i]
+			s.mu.Unlock()
 		}
 		rt.pool.SyncToDir(auths)
 	}
@@ -211,7 +219,9 @@ func (s *CnUpstreamService) RefreshToken(platform, uid string) error {
 	if !ok {
 		return nil
 	}
+	s.mu.Lock()
 	acct := s.acctRefs[uid]
+	s.mu.Unlock()
 	if acct == nil {
 		// 未知引用时以 uid 重建，仅回写 credentials。
 		id, _ := strconv.ParseInt(uid, 10, 64)
@@ -272,4 +282,129 @@ func (s *CnUpstreamService) PoolStatus(platform string) []pool.Status {
 		return rt.pool.List()
 	}
 	return nil
+}
+
+// cnAccountGetter 单账号查询切片（AccountRepository 已实现）。
+type cnAccountGetter interface {
+	GetByID(ctx context.Context, id int64) (*Account, error)
+}
+
+// CnCreditsDetail 积分明细响应（总余额 + 各套餐条目）。
+type CnCreditsDetail struct {
+	CreditsRemain int64                   `json:"credits_remain"`
+	Items         []provider.ResourceItem `json:"items"`
+}
+
+// CnCheckinResult 手动签到结果（业务失败如「已签到」也算成功响应，前端按 message 提示）。
+type CnCheckinResult struct {
+	Success       bool   `json:"success"`
+	Message       string `json:"message"`
+	CreditsRemain int64  `json:"credits_remain"`
+}
+
+// loadCnAccount 按账号 ID 取三渠道账号并构造运行期 auth；非三渠道平台报错。
+func (s *CnUpstreamService) loadCnAccount(ctx context.Context, accountID int64) (*cnUpstreamPlatform, *Account, *auth.Auth, error) {
+	getter, ok := s.accountRepo.(cnAccountGetter)
+	if !ok {
+		return nil, nil, nil, infraerrors.Newf(http.StatusInternalServerError, "CN_UPSTREAM_REPO_UNSUPPORTED",
+			"account repo does not support GetByID")
+	}
+	acct, err := getter.GetByID(ctx, accountID)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	if acct == nil {
+		return nil, nil, nil, infraerrors.Newf(http.StatusNotFound, "CN_ACCOUNT_NOT_FOUND",
+			"账号 %d 不存在", accountID)
+	}
+	rt, ok := s.platforms[acct.Platform]
+	if !ok {
+		return nil, nil, nil, infraerrors.Newf(http.StatusBadRequest, "CN_ACCOUNT_UNSUPPORTED_PLATFORM",
+			"平台 %q 不支持积分/签到（仅 workbuddy/traework/qoder）", acct.Platform)
+	}
+	a := hydrateAuth(acct, acct.Platform)
+	s.mu.Lock()
+	s.acctRefs[a.UID] = acct
+	s.mu.Unlock()
+	return rt, acct, a, nil
+}
+
+// persistCreditsRemain 把余额写入账号 credentials（驼峰键 creditsRemain）并回写仓储。
+func (s *CnUpstreamService) persistCreditsRemain(ctx context.Context, acct *Account, uid string, remain int64, p *pool.Pool) {
+	if acct.Credentials == nil {
+		acct.Credentials = map[string]any{}
+	}
+	acct.Credentials["creditsRemain"] = remain
+	if upd, ok := s.accountRepo.(cnUpdater); ok {
+		if err := upd.Update(ctx, acct); err != nil {
+			log.Printf("cnupstream: persist credits for account %d failed: %v", acct.ID, err)
+		}
+	}
+	if p != nil {
+		p.SetCredits(uid, remain)
+		p.ReenableIfCredits(uid, remain)
+	}
+}
+
+// RefreshCredits 刷新单账号积分余额：调上游 UserResource，写入账号
+// credentials["creditsRemain"] 并同步池状态，返回余额。
+func (s *CnUpstreamService) RefreshCredits(ctx context.Context, accountID int64) (int64, error) {
+	rt, acct, a, err := s.loadCnAccount(ctx, accountID)
+	if err != nil {
+		return 0, err
+	}
+	remain, err := rt.upstream.UserResource(a)
+	if err != nil {
+		return 0, infraerrors.Newf(http.StatusBadGateway, "CN_UPSTREAM_QUERY_FAILED", "查询积分失败: %v", err)
+	}
+	s.persistCreditsRemain(ctx, acct, a.UID, remain, rt.pool)
+	return remain, nil
+}
+
+// ResourceDetail 查询单账号积分明细（实时查上游，不落库）。
+func (s *CnUpstreamService) ResourceDetail(ctx context.Context, accountID int64) (*CnCreditsDetail, error) {
+	rt, _, a, err := s.loadCnAccount(ctx, accountID)
+	if err != nil {
+		return nil, err
+	}
+	remain, items, err := rt.upstream.UserResourceDetail(a)
+	if err != nil {
+		return nil, infraerrors.Newf(http.StatusBadGateway, "CN_UPSTREAM_QUERY_FAILED", "查询积分明细失败: %v", err)
+	}
+	return &CnCreditsDetail{CreditsRemain: remain, Items: items}, nil
+}
+
+// CheckinNow 单账号立即签到：签到成功后刷新余额并按余额解冻账号
+// （语义对齐原 workbuddy-wild scheduler.checkinOne）。
+// 业务失败（如「今日已签到」「无签到活动」）返回 Success=false + Message，不返回 error。
+func (s *CnUpstreamService) CheckinNow(ctx context.Context, accountID int64) (*CnCheckinResult, error) {
+	rt, acct, a, err := s.loadCnAccount(ctx, accountID)
+	if err != nil {
+		return nil, err
+	}
+	if err := rt.upstream.DailyCheckin(a); err != nil {
+		rt.pool.RecordCheckin(a.UID, false, err.Error())
+		return &CnCheckinResult{Success: false, Message: err.Error()}, nil
+	}
+	rt.pool.RecordCheckin(a.UID, true, "ok")
+	// 签到成功后刷新余额（签到通常发放积分，立即同步池与列表展示）。
+	remain := int64(0)
+	if r, rerr := rt.upstream.UserResource(a); rerr == nil {
+		remain = r
+		s.persistCreditsRemain(ctx, acct, a.UID, remain, rt.pool)
+	}
+	return &CnCheckinResult{Success: true, Message: "ok", CreditsRemain: remain}, nil
+}
+
+// FetchUpstreamModels 拉取三渠道账号的上游真实模型列表（供模型映射配置辅助选择）。
+func (s *CnUpstreamService) FetchUpstreamModels(ctx context.Context, accountID int64) ([]provider.ModelInfo, error) {
+	rt, _, a, err := s.loadCnAccount(ctx, accountID)
+	if err != nil {
+		return nil, err
+	}
+	models, err := rt.upstream.FetchModels(a)
+	if err != nil {
+		return nil, infraerrors.Newf(http.StatusBadGateway, "CN_UPSTREAM_QUERY_FAILED", "拉取上游模型列表失败: %v", err)
+	}
+	return models, nil
 }

@@ -312,6 +312,74 @@ export async function getCnOAuthStatus(state: string): Promise<{
   return data
 }
 
+/** 三渠道（WorkBuddy / TraeWork / Qoder）积分明细条目 */
+export interface CnResourceItem {
+  name: string
+  total: number
+  used: number
+  remain: number
+  expiry?: string
+}
+
+/** 三渠道积分明细响应 */
+export interface CnCreditsDetail {
+  credits_remain: number
+  items: CnResourceItem[]
+}
+
+/** 三渠道手动签到结果（业务失败如「已签到」也走成功响应，按 message 提示） */
+export interface CnCheckinResult {
+  success: boolean
+  message: string
+  credits_remain: number
+}
+
+/** 三渠道上游真实模型 */
+export interface CnUpstreamModel {
+  id: string
+  name: string
+  context_window: number
+  max_tokens: number
+}
+
+/**
+ * Refresh the credit balance of a CN upstream account (WorkBuddy / TraeWork / Qoder).
+ * @param id - Account ID
+ * @returns Latest credit balance (also persisted to account credentials)
+ */
+export async function refreshCnCredits(id: number): Promise<{ credits_remain: number }> {
+  const { data } = await apiClient.post<{ credits_remain: number }>(`/admin/accounts/${id}/credits/refresh`)
+  return data
+}
+
+/**
+ * Get the credit detail (per-package items) of a CN upstream account.
+ * @param id - Account ID
+ */
+export async function getCnCreditsDetail(id: number): Promise<CnCreditsDetail> {
+  const { data } = await apiClient.get<CnCreditsDetail>(`/admin/accounts/${id}/credits/detail`)
+  return data
+}
+
+/**
+ * Trigger an immediate daily check-in for a CN upstream account.
+ * Business failures (already checked in / no check-in activity) return success=false.
+ * @param id - Account ID
+ */
+export async function checkinCnAccount(id: number): Promise<CnCheckinResult> {
+  const { data } = await apiClient.post<CnCheckinResult>(`/admin/accounts/${id}/checkin`)
+  return data
+}
+
+/**
+ * Fetch the real upstream model list of a CN upstream account (model mapping helper).
+ * @param id - Account ID
+ */
+export async function getCnUpstreamModels(id: number): Promise<CnUpstreamModel[]> {
+  const { data } = await apiClient.get<CnUpstreamModel[]>(`/admin/accounts/${id}/upstream-models`)
+  return data
+}
+
 /**
  * Get account usage statistics
  * @param id - Account ID
@@ -1051,6 +1119,10 @@ export const accountsAPI = {
   refreshOpenAIToken,
   startCnOAuth,
   getCnOAuthStatus,
+  refreshCnCredits,
+  getCnCreditsDetail,
+  checkinCnAccount,
+  getCnUpstreamModels,
   batchCreate,
   batchUpdateCredentials,
   bulkUpdate,

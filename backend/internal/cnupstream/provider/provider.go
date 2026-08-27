@@ -66,10 +66,10 @@ func (e *Error) Error() string {
 
 // ModelInfo 动态/静态模型信息。
 type ModelInfo struct {
-	ID            string
-	Name          string
-	ContextWindow int64
-	MaxTokens     int64
+	ID            string `json:"id"`
+	Name          string `json:"name"`
+	ContextWindow int64  `json:"context_window"`
+	MaxTokens     int64  `json:"max_tokens"`
 }
 
 // ModelPricing 模型积分定价（从上游 API 拉取）。

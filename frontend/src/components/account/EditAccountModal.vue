@@ -1213,6 +1213,79 @@
           </div>
         </div>
         <p class="input-hint">{{ t('admin.accounts.domesticTool.editHint') }}</p>
+
+        <!-- 三渠道模型映射：请求模型 → 上游真实模型（网关转发时经 GetMappedModel 生效） -->
+        <div class="border-t border-gray-200 pt-4 dark:border-dark-600">
+          <label class="input-label">{{ t('admin.accounts.domesticTool.modelMapping') }}</label>
+          <p class="input-hint">{{ t('admin.accounts.domesticTool.modelMappingHint') }}</p>
+
+          <div class="mb-3 flex flex-wrap gap-2">
+            <button
+              type="button"
+              @click="fetchDomesticUpstreamModels"
+              :disabled="fetchingDomesticModels || !account?.id"
+              class="rounded-lg border border-cyan-200 px-3 py-1.5 text-sm text-cyan-600 hover:bg-cyan-50 disabled:cursor-not-allowed disabled:opacity-60 dark:border-cyan-800 dark:text-cyan-400 dark:hover:bg-cyan-900/30"
+            >
+              {{ fetchingDomesticModels ? t('admin.accounts.domesticTool.fetchUpstreamModelsLoading') : t('admin.accounts.domesticTool.fetchUpstreamModels') }}
+            </button>
+          </div>
+
+          <div v-if="domesticUpstreamModels.length > 0" class="mb-3 space-y-1">
+            <p class="text-xs text-gray-500 dark:text-gray-400">{{ t('admin.accounts.domesticTool.upstreamModelsHint') }}</p>
+            <div class="flex flex-wrap gap-1.5">
+              <button
+                v-for="model in domesticUpstreamModels"
+                :key="model.id"
+                type="button"
+                @click="fillDomesticModelTarget(model.id)"
+                :title="model.name !== model.id ? model.name : undefined"
+                class="rounded-full border border-gray-200 bg-gray-50 px-2.5 py-1 font-mono text-xs text-gray-700 transition-colors hover:border-cyan-300 hover:bg-cyan-50 hover:text-cyan-700 dark:border-dark-600 dark:bg-dark-700 dark:text-gray-300 dark:hover:border-cyan-700 dark:hover:text-cyan-400"
+              >
+                {{ model.id }}
+              </button>
+            </div>
+          </div>
+
+          <div v-if="domesticModelMappings.length > 0" class="mb-3 space-y-2">
+            <div v-for="(mapping, index) in domesticModelMappings" :key="index" class="flex items-center gap-2">
+              <input
+                v-model="mapping.from"
+                type="text"
+                class="input flex-1 font-mono"
+                :placeholder="t('admin.accounts.requestModel')"
+              />
+              <svg class="h-4 w-4 flex-shrink-0 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14 5l7 7m0 0l-7 7m7-7H3" />
+              </svg>
+              <input
+                v-model="mapping.to"
+                type="text"
+                class="input flex-1 font-mono"
+                :placeholder="t('admin.accounts.actualModel')"
+              />
+              <button
+                type="button"
+                @click="removeDomesticModelMapping(index)"
+                class="rounded-lg p-2 text-red-500 transition-colors hover:bg-red-50 hover:text-red-600 dark:hover:bg-red-900/20"
+              >
+                <svg class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                </svg>
+              </button>
+            </div>
+          </div>
+
+          <button
+            type="button"
+            @click="addDomesticModelMapping"
+            class="w-full rounded-lg border-2 border-dashed border-gray-300 px-4 py-2 text-gray-600 transition-colors hover:border-gray-400 hover:text-gray-700 dark:border-dark-500 dark:text-gray-400 dark:hover:border-dark-400 dark:hover:text-gray-300"
+          >
+            <svg class="mr-1 inline h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4" />
+            </svg>
+            {{ t('admin.accounts.addMapping') }}
+          </button>
+        </div>
       </div>
 
       <!-- Antigravity model restriction (applies to all antigravity types) -->
@@ -2804,6 +2877,8 @@ import { useI18n } from 'vue-i18n'
 import { useAppStore } from '@/stores/app'
 import { useAuthStore } from '@/stores/auth'
 import { adminAPI } from '@/api/admin'
+import type { CnUpstreamModel } from '@/api/admin/accounts'
+import { extractApiErrorMessage } from '@/utils/apiError'
 import { useQuotaNotifyState } from '@/composables/useQuotaNotifyState'
 import type {
   Account,
@@ -2955,6 +3030,45 @@ const isDomesticOAuthAccount = computed(() =>
 const editDomesticOAuth = reactive<Record<string, string>>(
   Object.fromEntries(DOMESTIC_OAUTH_FIELD_LIST.map(({ key }) => [key, ''])) as Record<string, string>
 )
+// 三渠道模型映射（请求模型 → 上游真实模型），提交时写入 credentials.model_mapping
+const domesticModelMappings = ref<Array<{ from: string; to: string }>>([])
+// 拉取到的上游真实模型列表（点击填入映射目标）
+const domesticUpstreamModels = ref<CnUpstreamModel[]>([])
+const fetchingDomesticModels = ref(false)
+
+const addDomesticModelMapping = () => {
+  domesticModelMappings.value.push({ from: '', to: '' })
+}
+
+const removeDomesticModelMapping = (index: number) => {
+  domesticModelMappings.value.splice(index, 1)
+}
+
+const fillDomesticModelTarget = (modelId: string) => {
+  // 优先填入最后一个「目标为空」的行；没有则新增一行
+  const emptyRow = [...domesticModelMappings.value].reverse().find((m) => !m.to.trim())
+  if (emptyRow) {
+    emptyRow.to = modelId
+    return
+  }
+  domesticModelMappings.value.push({ from: '', to: modelId })
+}
+
+const fetchDomesticUpstreamModels = async () => {
+  if (!props.account?.id || fetchingDomesticModels.value) return
+  fetchingDomesticModels.value = true
+  try {
+    const models = await adminAPI.accounts.getCnUpstreamModels(props.account.id)
+    domesticUpstreamModels.value = models
+    if (models.length === 0) {
+      appStore.showError(t('admin.accounts.domesticTool.fetchUpstreamModelsEmpty'))
+    }
+  } catch (error) {
+    appStore.showError(extractApiErrorMessage(error, t('admin.accounts.domesticTool.fetchUpstreamModelsFailed')))
+  } finally {
+    fetchingDomesticModels.value = false
+  }
+}
 
 // ── 国产供应商（Kimi / Zhipu / DeepSeek）account_mode / api_protocol 编辑 ──
 // account_mode 决定额度/余额监控路径，api_protocol 决定转发端点与格式；
@@ -3639,6 +3753,9 @@ const syncFormFromAccount = (newAccount: Account | null) => {
   mixedChannelWarningDetails.value = null
   mixedChannelWarningRawMessage.value = ''
   mixedChannelWarningAction.value = null
+  // 三渠道（WorkBuddy / TraeWork / Qoder）：重置模型映射与上游模型列表
+  domesticModelMappings.value = []
+  domesticUpstreamModels.value = []
   form.name = newAccount.name
   form.notes = newAccount.notes || ''
   form.proxy_id = newAccount.proxy_id
@@ -4003,6 +4120,11 @@ const syncFormFromAccount = (newAccount: Account | null) => {
     for (const { key } of DOMESTIC_OAUTH_FIELD_LIST) {
       editDomesticOAuth[key] = typeof credentials[key] === 'string' ? (credentials[key] as string) : ''
     }
+    // 回填模型映射（credentials.model_mapping：请求模型 → 上游真实模型）
+    const rawDomesticMapping = credentials.model_mapping as Record<string, unknown> | undefined
+    domesticModelMappings.value = rawDomesticMapping
+      ? Object.entries(rawDomesticMapping).map(([from, to]) => ({ from, to: String(to) }))
+      : []
   } else {
     const platformDefaultUrl =
       newAccount.platform === 'openai'
@@ -4843,6 +4965,21 @@ const handleSubmit = async () => {
         } else {
           delete newCredentials[key]
         }
+      }
+
+      // 模型映射（请求模型 → 上游真实模型），网关转发时经 GetMappedModel 生效
+      const domesticMapping: Record<string, string> = {}
+      for (const m of domesticModelMappings.value) {
+        const from = m.from.trim()
+        const to = m.to.trim()
+        if (from && to) {
+          domesticMapping[from] = to
+        }
+      }
+      if (Object.keys(domesticMapping).length > 0) {
+        newCredentials.model_mapping = domesticMapping
+      } else {
+        delete newCredentials.model_mapping
       }
 
       applyInterceptWarmup(newCredentials, interceptWarmupRequests.value, 'edit')

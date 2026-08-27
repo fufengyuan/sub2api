@@ -117,7 +117,27 @@ export default {
         lastUsed: '最近使用',
         createdAt: '创建时间',
         expiresAt: '过期时间',
+        credits: '积分',
         actions: '操作'
+      },
+      // 三渠道（WorkBuddy / TraeWork / Qoder）积分与签到
+      cnCredits: {
+        refreshCredits: '刷新积分',
+        refreshSuccess: '积分已刷新：{credits}',
+        creditsDetail: '积分明细',
+        checkinNow: '立即签到',
+        checkinSuccess: '签到成功，当前积分：{credits}',
+        checkinFailed: '签到失败：{message}',
+        noCheckinActivity: '该平台无签到活动',
+        detailTitle: '积分明细',
+        detailRemain: '当前余额',
+        detailItemName: '套餐 / 条目',
+        detailTotal: '总量',
+        detailUsed: '已用',
+        detailRemainCol: '剩余',
+        detailExpiry: '到期时间',
+        detailEmpty: '暂无积分明细',
+        loading: '查询中…'
       },
       schedulerScore: {
         baseShort: '普通',
@@ -1054,7 +1074,14 @@ export default {
         nickname: '昵称',
         enterpriseId: 'Enterprise ID',
         oauthCredentialHint: '至少填写 Access Token / Refresh Token / Machine Token 中的一项',
-        editHint: '留空字段将保持当前值'
+        editHint: '留空字段将保持当前值',
+        modelMapping: '模型映射',
+        modelMappingHint: '将客户端请求的模型名映射为上游真实模型名；支持通配符（如 claude-* → 上游模型）',
+        fetchUpstreamModels: '拉取上游模型',
+        fetchUpstreamModelsLoading: '拉取中…',
+        fetchUpstreamModelsFailed: '拉取上游模型失败',
+        fetchUpstreamModelsEmpty: '上游未返回模型列表',
+        upstreamModelsHint: '点击模型名快速填入映射的目标模型'
       },
       // Upstream type
       upstream: {

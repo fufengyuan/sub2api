@@ -408,6 +408,12 @@ func registerAccountRoutes(admin *gin.RouterGroup, h *handler.Handlers, stepUpAu
 		accounts.POST("/batch-clear-error", h.Admin.Account.BatchClearError)
 		accounts.POST("/batch-refresh", h.Admin.Account.BatchRefresh)
 
+		// 三渠道（workbuddy/traework/qoder）积分/签到/上游模型
+		accounts.POST("/:id/credits/refresh", h.Admin.CNUpstream.RefreshCredits)
+		accounts.GET("/:id/credits/detail", h.Admin.CNUpstream.CreditsDetail)
+		accounts.POST("/:id/checkin", h.Admin.CNUpstream.Checkin)
+		accounts.GET("/:id/upstream-models", h.Admin.CNUpstream.UpstreamModels)
+
 		// Antigravity 默认模型映射
 		accounts.GET("/antigravity/default-model-mapping", h.Admin.Account.GetAntigravityDefaultModelMapping)
 

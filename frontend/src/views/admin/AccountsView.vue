@@ -283,6 +283,22 @@
               </div>
             </div>
           </template>
+          <template #cell-credits="{ row }">
+            <div v-if="isCnUpstreamRow(row)" class="flex items-center gap-1.5">
+              <span class="font-mono text-sm text-gray-700 dark:text-gray-300" :title="t('admin.accounts.cnCredits.detailRemain')">
+                {{ getCreditsRemain(row) }}
+              </span>
+              <button
+                @click.stop="handleRefreshCredits(row)"
+                :disabled="refreshingCredits.has(row.id)"
+                class="rounded p-1 text-gray-400 transition-colors hover:bg-gray-100 hover:text-cyan-600 disabled:cursor-not-allowed disabled:opacity-50 dark:hover:bg-dark-700 dark:hover:text-cyan-400"
+                :title="t('admin.accounts.cnCredits.refreshCredits')"
+              >
+                <Icon name="refresh" size="xs" :class="[refreshingCredits.has(row.id) ? 'animate-spin' : '']" />
+              </button>
+            </div>
+            <span v-else class="text-sm text-gray-400 dark:text-dark-500">-</span>
+          </template>
           <template #cell-capacity="{ row }">
             <AccountCapacityCell :account="row" />
           </template>
@@ -456,7 +472,7 @@
     <AccountTestModal :show="showTest" :account="testingAcc" @close="closeTestModal" />
     <AccountStatsModal :show="showStats" :account="statsAcc" @close="closeStatsModal" />
     <ScheduledTestsPanel :show="showSchedulePanel" :account-id="scheduleAcc?.id ?? null" :model-options="scheduleModelOptions" @close="closeSchedulePanel" />
-    <AccountActionMenu :show="menu.show" :account="menu.acc" :position="menu.pos" @close="menu.show = false" @test="handleTest" @stats="handleViewStats" @schedule="handleSchedule" @duplicate="handleDuplicateAccount" @reauth="handleReAuth" @refresh-token="handleRefresh" @recover-state="handleRecoverState" @reset-quota="handleResetQuota" @set-privacy="handleSetPrivacy" @create-spark-shadow="handleCreateSparkShadow" />
+    <AccountActionMenu :show="menu.show" :account="menu.acc" :position="menu.pos" @close="menu.show = false" @test="handleTest" @stats="handleViewStats" @schedule="handleSchedule" @duplicate="handleDuplicateAccount" @reauth="handleReAuth" @refresh-token="handleRefresh" @recover-state="handleRecoverState" @reset-quota="handleResetQuota" @set-privacy="handleSetPrivacy" @create-spark-shadow="handleCreateSparkShadow" @refresh-credits="handleRefreshCredits" @credits-detail="handleViewCreditsDetail" @checkin="handleCheckin" />
     <SyncFromCrsModal :show="showSync" @close="showSync = false" @synced="reload" />
     <ImportDataModal :show="showImportData" @close="showImportData = false" @imported="handleDataImported" />
     <BulkEditAccountModal
@@ -471,6 +487,7 @@
       @updated="handleBulkUpdated"
     />
     <TempUnschedStatusModal :show="showTempUnsched" :account="tempUnschedAcc" @close="showTempUnsched = false" @reset="handleTempUnschedReset" />
+    <CnCreditsDetailModal :show="showCreditsDetail" :account="creditsAcc" @close="showCreditsDetail = false" />
     <ConfirmDialog :show="showDeleteDialog" :title="t('admin.accounts.deleteAccount')" :message="t('admin.accounts.deleteConfirm', { name: deletingAcc?.name })" :confirm-text="t('common.delete')" :cancel-text="t('common.cancel')" :danger="true" @confirm="confirmDelete" @cancel="showDeleteDialog = false" />
     <ConfirmDialog :show="showCreateShadowDialog" :title="t('admin.accounts.createSparkShadow')" :message="t('admin.accounts.createSparkShadowConfirm', { name: creatingShadowAcc?.name })" @confirm="confirmCreateSparkShadow" @cancel="showCreateShadowDialog = false" />
     <ConfirmDialog :show="showExportDataDialog" :title="t('admin.accounts.dataExport')" :message="t('admin.accounts.dataExportConfirmMessage')" :confirm-text="t('admin.accounts.dataExportConfirm')" :cancel-text="t('common.cancel')" @confirm="handleExportData" @cancel="showExportDataDialog = false">
@@ -503,7 +520,7 @@ import DataTable from '@/components/common/DataTable.vue'
 import HelpTooltip from '@/components/common/HelpTooltip.vue'
 import Pagination from '@/components/common/Pagination.vue'
 import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
-import { CreateAccountModal, EditAccountModal, BulkEditAccountModal, SyncFromCrsModal, TempUnschedStatusModal } from '@/components/account'
+import { CreateAccountModal, EditAccountModal, BulkEditAccountModal, SyncFromCrsModal, TempUnschedStatusModal, CnCreditsDetailModal } from '@/components/account'
 import AccountTableActions from '@/components/admin/account/AccountTableActions.vue'
 import AccountTableFilters from '@/components/admin/account/AccountTableFilters.vue'
 import AccountBulkActionsBar from '@/components/admin/account/AccountBulkActionsBar.vue'
@@ -590,6 +607,8 @@ const includeProxyOnExport = ref(true)
 const showBulkEdit = ref(false)
 const bulkEditTarget = ref<AccountBulkEditTarget | null>(null)
 const showTempUnsched = ref(false)
+const showCreditsDetail = ref(false)
+const refreshingCredits = ref(new Set<number>())
 const showDeleteDialog = ref(false)
 const showCreateShadowDialog = ref(false)
 const showReAuth = ref(false)
@@ -599,6 +618,7 @@ const showErrorPassthrough = ref(false)
 const showTLSFingerprintProfiles = ref(false)
 const edAcc = ref<Account | null>(null)
 const tempUnschedAcc = ref<Account | null>(null)
+const creditsAcc = ref<Account | null>(null)
 const deletingAcc = ref<Account | null>(null)
 const creatingShadowAcc = ref<Account | null>(null)
 const reAuthAcc = ref<Account | null>(null)
@@ -1693,6 +1713,7 @@ const allColumns = computed(() => {
     { key: 'name', label: t('admin.accounts.columns.name'), sortable: true },
     { key: 'id', label: t('admin.accounts.columns.id'), sortable: true },
     { key: 'platform_type', label: t('admin.accounts.columns.platformType'), sortable: false },
+    { key: 'credits', label: t('admin.accounts.columns.credits'), sortable: false },
     { key: 'capacity', label: t('admin.accounts.columns.capacity'), sortable: false },
     { key: 'status', label: t('admin.accounts.columns.status'), sortable: true },
     { key: 'schedulable', label: t('admin.accounts.columns.schedulable'), sortable: true },
@@ -2385,6 +2406,43 @@ const handleToggleSchedulable = async (a: Account) => {
   }
 }
 const handleShowTempUnsched = (a: Account) => { tempUnschedAcc.value = a; showTempUnsched.value = true }
+// ── 三渠道（WorkBuddy / TraeWork / Qoder）积分与签到 ──
+const isCnUpstreamRow = (row: any) =>
+  row?.platform === 'workbuddy' || row?.platform === 'traework' || row?.platform === 'qoder'
+const getCreditsRemain = (row: any) => {
+  const remain = (row?.credentials as Record<string, unknown> | undefined)?.creditsRemain
+  return typeof remain === 'number' ? remain : '-'
+}
+const applyCreditsRemain = (a: Account, remain: number) => {
+  if (!a.credentials) a.credentials = {}
+  ;(a.credentials as Record<string, unknown>).creditsRemain = remain
+}
+const handleRefreshCredits = async (a: Account) => {
+  refreshingCredits.value.add(a.id)
+  try {
+    const { credits_remain } = await adminAPI.accounts.refreshCnCredits(a.id)
+    applyCreditsRemain(a, credits_remain)
+    appStore.showSuccess(t('admin.accounts.cnCredits.refreshSuccess', { credits: credits_remain }))
+  } catch (error) {
+    appStore.showError(extractApiErrorMessage(error))
+  } finally {
+    refreshingCredits.value.delete(a.id)
+  }
+}
+const handleViewCreditsDetail = (a: Account) => { creditsAcc.value = a; showCreditsDetail.value = true }
+const handleCheckin = async (a: Account) => {
+  try {
+    const result = await adminAPI.accounts.checkinCnAccount(a.id)
+    if (result.success) {
+      applyCreditsRemain(a, result.credits_remain)
+      appStore.showSuccess(t('admin.accounts.cnCredits.checkinSuccess', { credits: result.credits_remain }))
+    } else {
+      appStore.showError(t('admin.accounts.cnCredits.checkinFailed', { message: result.message }))
+    }
+  } catch (error) {
+    appStore.showError(extractApiErrorMessage(error))
+  }
+}
 const handleTempUnschedReset = async (updated: Account) => {
   showTempUnsched.value = false
   tempUnschedAcc.value = null

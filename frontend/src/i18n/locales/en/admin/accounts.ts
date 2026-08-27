@@ -204,7 +204,27 @@ export default {
         lastUsed: 'Last Used',
         createdAt: 'Created',
         expiresAt: 'Expires At',
+        credits: 'Credits',
         actions: 'Actions'
+      },
+      // CN upstream (WorkBuddy / TraeWork / Qoder) credits & check-in
+      cnCredits: {
+        refreshCredits: 'Refresh Credits',
+        refreshSuccess: 'Credits refreshed: {credits}',
+        creditsDetail: 'Credits Detail',
+        checkinNow: 'Check In Now',
+        checkinSuccess: 'Checked in, current credits: {credits}',
+        checkinFailed: 'Check-in failed: {message}',
+        noCheckinActivity: 'No check-in activity on this platform',
+        detailTitle: 'Credits Detail',
+        detailRemain: 'Current Balance',
+        detailItemName: 'Package / Item',
+        detailTotal: 'Total',
+        detailUsed: 'Used',
+        detailRemainCol: 'Remaining',
+        detailExpiry: 'Expires At',
+        detailEmpty: 'No credit details',
+        loading: 'Loading…'
       },
       schedulerScore: {
         baseShort: 'Base',
@@ -990,7 +1010,14 @@ export default {
         nickname: 'Nickname',
         enterpriseId: 'Enterprise ID',
         oauthCredentialHint: 'Fill in at least one of Access Token / Refresh Token / Machine Token',
-        editHint: 'Fields left empty will keep their current value'
+        editHint: 'Fields left empty will keep their current value',
+        modelMapping: 'Model Mapping',
+        modelMappingHint: 'Map client-requested model names to real upstream model names; wildcards supported (e.g. claude-* → upstream model)',
+        fetchUpstreamModels: 'Fetch Upstream Models',
+        fetchUpstreamModelsLoading: 'Fetching…',
+        fetchUpstreamModelsFailed: 'Failed to fetch upstream models',
+        fetchUpstreamModelsEmpty: 'Upstream returned no models',
+        upstreamModelsHint: 'Click a model name to fill it into the mapping target'
       },
       // Upstream type
       upstream: {
