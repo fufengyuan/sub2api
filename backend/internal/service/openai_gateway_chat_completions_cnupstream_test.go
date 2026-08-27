@@ -14,10 +14,9 @@ import (
 )
 
 // cnUpstreamSSEFixture 三渠道上游返回的 OpenAI 形 SSE（含 usage 与 finish_reason）。
-const cnUpstreamSSEFixture string =
-	"data: {\"id\":\"chatcmpl-cn1\",\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.2\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":\"你好\"}}]}\n\n" +
-		"data: {\"id\":\"chatcmpl-cn1\",\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.2\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"，世界\"},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":12,\"completion_tokens\":8,\"total_tokens\":20}}\n\n" +
-		"data: [DONE]\n\n"
+const cnUpstreamSSEFixture string = "data: {\"id\":\"chatcmpl-cn1\",\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.2\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":\"你好\"}}]}\n\n" +
+	"data: {\"id\":\"chatcmpl-cn1\",\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.2\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"，世界\"},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":12,\"completion_tokens\":8,\"total_tokens\":20}}\n\n" +
+	"data: [DONE]\n\n"
 
 // cnGatewayForward 以真实 CnUpstreamService（内置平台默认上游客户端）+ 注入假 ChatStream
 // 的场景，白盒调用 forwardCnUpstreamChatCompletions 并返回响应记录器与结果。
