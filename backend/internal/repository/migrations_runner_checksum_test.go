@@ -43,6 +43,15 @@ func TestIsMigrationChecksumCompatible(t *testing.T) {
 		require.True(t, ok)
 	})
 
+	t.Run("227兼容共享库历史checksum", func(t *testing.T) {
+		ok := isMigrationChecksumCompatible(
+			"227_composite_routes_add_cn_providers.sql",
+			"ff6e3323b4bcb195a4f11bfa9b1b22286e77169f551b5c4294ab3d31828d8ff8",
+			"9cdbf6dfe7ece39f7811d23e96ffb32b89118cf09cece8e1788db93e097940f6",
+		)
+		require.True(t, ok)
+	})
+
 	t.Run("非白名单迁移不兼容", func(t *testing.T) {
 		ok := isMigrationChecksumCompatible(
 			"001_init.sql",
