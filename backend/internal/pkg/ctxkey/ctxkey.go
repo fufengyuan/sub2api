@@ -20,6 +20,10 @@ const (
 	// CompositeRouteSource 标识 composite 解析结果来自显式路由还是内置模型探测。
 	CompositeRouteSource Key = "ctx_composite_route_source"
 
+	// CompositeCandidates 是 composite 分组解析出的有序候选平台列表
+	// （主目标在前，fallback 依次在后），供多平台 fallback 调度使用。
+	CompositeCandidates Key = "ctx_composite_candidates"
+
 	// RequestID 为服务端生成/透传的请求 ID。
 	RequestID Key = "ctx_request_id"
 

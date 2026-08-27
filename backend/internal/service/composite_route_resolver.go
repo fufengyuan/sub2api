@@ -38,6 +38,22 @@ func (r *CompositeRouteResolver) Resolve(ctx context.Context, groupID int64, mod
 			if upstreamModel == "" {
 				upstreamModel = model
 			}
+			// 候选平台：主目标在前，fallback 依次在后。
+			candidates := make([]CompositeRouteCandidate, 0, 1+len(route.FallbackTargets))
+			candidates = append(candidates, CompositeRouteCandidate{
+				Platform:      route.TargetPlatform,
+				UpstreamModel: upstreamModel,
+			})
+			for _, fb := range route.FallbackTargets {
+				fbUpstream := strings.TrimSpace(fb.UpstreamModel)
+				if fbUpstream == "" {
+					fbUpstream = model
+				}
+				candidates = append(candidates, CompositeRouteCandidate{
+					Platform:      fb.Platform,
+					UpstreamModel: fbUpstream,
+				})
+			}
 			return CompositeRouteDecision{
 				Matched:        true,
 				Source:         CompositeRouteSourceExplicit,
@@ -47,6 +63,7 @@ func (r *CompositeRouteResolver) Resolve(ctx context.Context, groupID int64, mod
 				UpstreamModel:  upstreamModel,
 				Endpoint:       endpoint,
 				Route:          &route,
+				Candidates:     candidates,
 			}, nil
 		}
 	}

@@ -231,15 +231,21 @@ type UpdateGroupRequest struct {
 	CopyAccountsFromGroupIDs []int64 `json:"copy_accounts_from_group_ids"`
 }
 
+type CompositeRouteTargetRequest struct {
+	Platform      string `json:"platform" binding:"required,oneof=anthropic openai gemini antigravity grok kimi zhipu deepseek workbuddy traework qoder"`
+	UpstreamModel string `json:"upstream_model"`
+}
+
 type CompositeRouteRequest struct {
-	PublicModel    string `json:"public_model" binding:"required"`
-	MatchType      string `json:"match_type" binding:"omitempty,oneof=exact prefix"`
-	TargetPlatform string `json:"target_platform" binding:"required,oneof=anthropic openai gemini antigravity grok kimi zhipu deepseek workbuddy traework"`
-	UpstreamModel  string `json:"upstream_model"`
-	Endpoint       string `json:"endpoint" binding:"omitempty,oneof=any messages count_tokens responses chat_completions embeddings images gemini"`
-	Priority       int    `json:"priority"`
-	Enabled        *bool  `json:"enabled"`
-	Notes          string `json:"notes"`
+	PublicModel      string                       `json:"public_model" binding:"required"`
+	MatchType        string                       `json:"match_type" binding:"omitempty,oneof=exact prefix"`
+	TargetPlatform   string                       `json:"target_platform" binding:"required,oneof=anthropic openai gemini antigravity grok kimi zhipu deepseek workbuddy traework qoder"`
+	UpstreamModel    string                       `json:"upstream_model"`
+	Endpoint         string                       `json:"endpoint" binding:"omitempty,oneof=any messages count_tokens responses chat_completions embeddings images gemini"`
+	Priority         int                          `json:"priority"`
+	Enabled          *bool                        `json:"enabled"`
+	Notes            string                       `json:"notes"`
+	FallbackTargets  []CompositeRouteTargetRequest `json:"fallback_targets"`
 }
 
 type CompositeRoutePreviewRequest struct {
@@ -387,15 +393,23 @@ func compositeRouteRequestToInput(req CompositeRouteRequest, defaultEnabled bool
 	if req.Enabled != nil {
 		enabled = *req.Enabled
 	}
+	fallbacks := make([]service.CompositeRouteTarget, 0, len(req.FallbackTargets))
+	for _, fb := range req.FallbackTargets {
+		fallbacks = append(fallbacks, service.CompositeRouteTarget{
+			Platform:      fb.Platform,
+			UpstreamModel: fb.UpstreamModel,
+		})
+	}
 	return service.CompositeRouteInput{
-		PublicModel:    req.PublicModel,
-		MatchType:      req.MatchType,
-		TargetPlatform: req.TargetPlatform,
-		UpstreamModel:  req.UpstreamModel,
-		Endpoint:       req.Endpoint,
-		Priority:       req.Priority,
-		Enabled:        enabled,
-		Notes:          req.Notes,
+		PublicModel:     req.PublicModel,
+		MatchType:       req.MatchType,
+		TargetPlatform:  req.TargetPlatform,
+		UpstreamModel:   req.UpstreamModel,
+		Endpoint:        req.Endpoint,
+		Priority:        req.Priority,
+		Enabled:         enabled,
+		Notes:           req.Notes,
+		FallbackTargets: fallbacks,
 	}
 }
 

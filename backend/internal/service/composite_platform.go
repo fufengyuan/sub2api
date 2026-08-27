@@ -60,6 +60,15 @@ func ResolvedUpstreamModelFromContext(ctx context.Context) (string, bool) {
 	return model, true
 }
 
+// WithResolvedUpstreamModel 写入已解析的上游模型名（composite 多平台 fallback
+// 选中实际平台后，覆盖 middleware 用主目标写入的单值）。
+func WithResolvedUpstreamModel(ctx context.Context, model string) context.Context {
+	if ctx == nil || strings.TrimSpace(model) == "" {
+		return ctx
+	}
+	return context.WithValue(ctx, ctxkey.ResolvedUpstreamModel, model)
+}
+
 func RequestedPublicModelFromContext(ctx context.Context) (string, bool) {
 	if ctx == nil {
 		return "", false
@@ -82,6 +91,27 @@ func CompositeRouteSourceFromContext(ctx context.Context) (string, bool) {
 		return "", false
 	}
 	return source, true
+}
+
+// WithCompositeCandidates 把 composite 解析出的有序候选平台列表写入 ctx，
+// 供多平台 fallback 调度在选中平台后使用对应候选的 UpstreamModel。
+func WithCompositeCandidates(ctx context.Context, candidates []CompositeRouteCandidate) context.Context {
+	if ctx == nil || len(candidates) == 0 {
+		return ctx
+	}
+	return context.WithValue(ctx, ctxkey.CompositeCandidates, candidates)
+}
+
+// CompositeCandidatesFromContext 返回 composite 候选平台列表（有序）。
+func CompositeCandidatesFromContext(ctx context.Context) []CompositeRouteCandidate {
+	if ctx == nil {
+		return nil
+	}
+	cands, ok := ctx.Value(ctxkey.CompositeCandidates).([]CompositeRouteCandidate)
+	if !ok {
+		return nil
+	}
+	return cands
 }
 
 // DetectModelPlatform maps common public model IDs to the concrete provider

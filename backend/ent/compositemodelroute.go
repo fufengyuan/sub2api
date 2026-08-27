@@ -3,6 +3,7 @@
 package ent
 
 import (
+	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
@@ -42,6 +43,8 @@ type CompositeModelRoute struct {
 	Enabled bool `json:"enabled,omitempty"`
 	// Notes holds the value of the "notes" field.
 	Notes *string `json:"notes,omitempty"`
+	// Ordered fallback provider targets: [{platform, upstream_model}].
+	FallbackTargets []map[string]interface{} `json:"fallback_targets,omitempty"`
 	// Edges holds the relations/edges for other nodes in the graph.
 	// The values are being populated by the CompositeModelRouteQuery when eager-loading is set.
 	Edges        CompositeModelRouteEdges `json:"edges"`
@@ -73,6 +76,8 @@ func (*CompositeModelRoute) scanValues(columns []string) ([]any, error) {
 	values := make([]any, len(columns))
 	for i := range columns {
 		switch columns[i] {
+		case compositemodelroute.FieldFallbackTargets:
+			values[i] = new([]byte)
 		case compositemodelroute.FieldEnabled:
 			values[i] = new(sql.NullBool)
 		case compositemodelroute.FieldID, compositemodelroute.FieldGroupID, compositemodelroute.FieldPriority:
@@ -176,6 +181,14 @@ func (_m *CompositeModelRoute) assignValues(columns []string, values []any) erro
 				_m.Notes = new(string)
 				*_m.Notes = value.String
 			}
+		case compositemodelroute.FieldFallbackTargets:
+			if value, ok := values[i].(*[]byte); !ok {
+				return fmt.Errorf("unexpected type %T for field fallback_targets", values[i])
+			} else if value != nil && len(*value) > 0 {
+				if err := json.Unmarshal(*value, &_m.FallbackTargets); err != nil {
+					return fmt.Errorf("unmarshal field fallback_targets: %w", err)
+				}
+			}
 		default:
 			_m.selectValues.Set(columns[i], values[i])
 		}
@@ -256,6 +269,9 @@ func (_m *CompositeModelRoute) String() string {
 		builder.WriteString("notes=")
 		builder.WriteString(*v)
 	}
+	builder.WriteString(", ")
+	builder.WriteString("fallback_targets=")
+	builder.WriteString(fmt.Sprintf("%v", _m.FallbackTargets))
 	builder.WriteByte(')')
 	return builder.String()
 }

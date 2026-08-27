@@ -51,6 +51,7 @@ func (r *compositeModelRouteRepository) Create(ctx context.Context, route *servi
 		SetPriority(route.Priority).
 		SetEnabled(route.Enabled).
 		SetNotes(route.Notes).
+		SetFallbackTargets(compositeRouteTargetsToAny(route.FallbackTargets)).
 		Save(ctx)
 	if err != nil {
 		return translatePersistenceError(err, nil, service.ErrCompositeRouteExists)
@@ -72,6 +73,7 @@ func (r *compositeModelRouteRepository) Update(ctx context.Context, route *servi
 		SetPriority(route.Priority).
 		SetEnabled(route.Enabled).
 		SetNotes(route.Notes).
+		SetFallbackTargets(compositeRouteTargetsToAny(route.FallbackTargets)).
 		Save(ctx)
 	if err != nil {
 		return translatePersistenceError(err, service.ErrCompositeRouteNotFound, service.ErrCompositeRouteExists)
@@ -97,17 +99,50 @@ func compositeModelRouteEntityToService(row *dbent.CompositeModelRoute) *service
 		return nil
 	}
 	return &service.CompositeModelRoute{
-		ID:             row.ID,
-		GroupID:        row.GroupID,
-		PublicModel:    row.PublicModel,
-		MatchType:      row.MatchType,
-		TargetPlatform: row.TargetPlatform,
-		UpstreamModel:  row.UpstreamModel,
-		Endpoint:       row.Endpoint,
-		Priority:       row.Priority,
-		Enabled:        row.Enabled,
-		Notes:          derefString(row.Notes),
-		CreatedAt:      row.CreatedAt,
-		UpdatedAt:      row.UpdatedAt,
+		ID:              row.ID,
+		GroupID:         row.GroupID,
+		PublicModel:     row.PublicModel,
+		MatchType:       row.MatchType,
+		TargetPlatform:  row.TargetPlatform,
+		UpstreamModel:   row.UpstreamModel,
+		Endpoint:        row.Endpoint,
+		Priority:        row.Priority,
+		Enabled:         row.Enabled,
+		Notes:           derefString(row.Notes),
+		FallbackTargets: compositeRouteTargetsFromAny(row.FallbackTargets),
+		CreatedAt:       row.CreatedAt,
+		UpdatedAt:       row.UpdatedAt,
 	}
+}
+
+// compositeRouteTargetsToAny 把 service 层 fallback 目标转为 ent jsonb 存储形态。
+func compositeRouteTargetsToAny(targets []service.CompositeRouteTarget) []map[string]any {
+	if len(targets) == 0 {
+		return nil
+	}
+	out := make([]map[string]any, 0, len(targets))
+	for _, t := range targets {
+		out = append(out, map[string]any{
+			"platform":       t.Platform,
+			"upstream_model": t.UpstreamModel,
+		})
+	}
+	return out
+}
+
+// compositeRouteTargetsFromAny 把 ent jsonb 存储形态转回 service 层 fallback 目标。
+func compositeRouteTargetsFromAny(raw []map[string]any) []service.CompositeRouteTarget {
+	if len(raw) == 0 {
+		return nil
+	}
+	out := make([]service.CompositeRouteTarget, 0, len(raw))
+	for _, m := range raw {
+		platform, _ := m["platform"].(string)
+		if platform == "" {
+			continue
+		}
+		upstream, _ := m["upstream_model"].(string)
+		out = append(out, service.CompositeRouteTarget{Platform: platform, UpstreamModel: upstream})
+	}
+	return out
 }

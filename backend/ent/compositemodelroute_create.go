@@ -175,6 +175,12 @@ func (_c *CompositeModelRouteCreate) SetNillableNotes(v *string) *CompositeModel
 	return _c
 }
 
+// SetFallbackTargets sets the "fallback_targets" field.
+func (_c *CompositeModelRouteCreate) SetFallbackTargets(v []map[string]interface{}) *CompositeModelRouteCreate {
+	_c.mutation.SetFallbackTargets(v)
+	return _c
+}
+
 // SetGroup sets the "group" edge to the Group entity.
 func (_c *CompositeModelRouteCreate) SetGroup(v *Group) *CompositeModelRouteCreate {
 	return _c.SetGroupID(v.ID)
@@ -254,6 +260,10 @@ func (_c *CompositeModelRouteCreate) defaults() error {
 	if _, ok := _c.mutation.Enabled(); !ok {
 		v := compositemodelroute.DefaultEnabled
 		_c.mutation.SetEnabled(v)
+	}
+	if _, ok := _c.mutation.FallbackTargets(); !ok {
+		v := compositemodelroute.DefaultFallbackTargets
+		_c.mutation.SetFallbackTargets(v)
 	}
 	return nil
 }
@@ -388,6 +398,10 @@ func (_c *CompositeModelRouteCreate) createSpec() (*CompositeModelRoute, *sqlgra
 	if value, ok := _c.mutation.Notes(); ok {
 		_spec.SetField(compositemodelroute.FieldNotes, field.TypeString, value)
 		_node.Notes = &value
+	}
+	if value, ok := _c.mutation.FallbackTargets(); ok {
+		_spec.SetField(compositemodelroute.FieldFallbackTargets, field.TypeJSON, value)
+		_node.FallbackTargets = value
 	}
 	if nodes := _c.mutation.GroupIDs(); len(nodes) > 0 {
 		edge := &sqlgraph.EdgeSpec{
@@ -608,6 +622,24 @@ func (u *CompositeModelRouteUpsert) ClearNotes() *CompositeModelRouteUpsert {
 	return u
 }
 
+// SetFallbackTargets sets the "fallback_targets" field.
+func (u *CompositeModelRouteUpsert) SetFallbackTargets(v []map[string]interface{}) *CompositeModelRouteUpsert {
+	u.Set(compositemodelroute.FieldFallbackTargets, v)
+	return u
+}
+
+// UpdateFallbackTargets sets the "fallback_targets" field to the value that was provided on create.
+func (u *CompositeModelRouteUpsert) UpdateFallbackTargets() *CompositeModelRouteUpsert {
+	u.SetExcluded(compositemodelroute.FieldFallbackTargets)
+	return u
+}
+
+// ClearFallbackTargets clears the value of the "fallback_targets" field.
+func (u *CompositeModelRouteUpsert) ClearFallbackTargets() *CompositeModelRouteUpsert {
+	u.SetNull(compositemodelroute.FieldFallbackTargets)
+	return u
+}
+
 // UpdateNewValues updates the mutable fields using the new values that were set on create.
 // Using this option is equivalent to using:
 //
@@ -825,6 +857,27 @@ func (u *CompositeModelRouteUpsertOne) UpdateNotes() *CompositeModelRouteUpsertO
 func (u *CompositeModelRouteUpsertOne) ClearNotes() *CompositeModelRouteUpsertOne {
 	return u.Update(func(s *CompositeModelRouteUpsert) {
 		s.ClearNotes()
+	})
+}
+
+// SetFallbackTargets sets the "fallback_targets" field.
+func (u *CompositeModelRouteUpsertOne) SetFallbackTargets(v []map[string]interface{}) *CompositeModelRouteUpsertOne {
+	return u.Update(func(s *CompositeModelRouteUpsert) {
+		s.SetFallbackTargets(v)
+	})
+}
+
+// UpdateFallbackTargets sets the "fallback_targets" field to the value that was provided on create.
+func (u *CompositeModelRouteUpsertOne) UpdateFallbackTargets() *CompositeModelRouteUpsertOne {
+	return u.Update(func(s *CompositeModelRouteUpsert) {
+		s.UpdateFallbackTargets()
+	})
+}
+
+// ClearFallbackTargets clears the value of the "fallback_targets" field.
+func (u *CompositeModelRouteUpsertOne) ClearFallbackTargets() *CompositeModelRouteUpsertOne {
+	return u.Update(func(s *CompositeModelRouteUpsert) {
+		s.ClearFallbackTargets()
 	})
 }
 
@@ -1211,6 +1264,27 @@ func (u *CompositeModelRouteUpsertBulk) UpdateNotes() *CompositeModelRouteUpsert
 func (u *CompositeModelRouteUpsertBulk) ClearNotes() *CompositeModelRouteUpsertBulk {
 	return u.Update(func(s *CompositeModelRouteUpsert) {
 		s.ClearNotes()
+	})
+}
+
+// SetFallbackTargets sets the "fallback_targets" field.
+func (u *CompositeModelRouteUpsertBulk) SetFallbackTargets(v []map[string]interface{}) *CompositeModelRouteUpsertBulk {
+	return u.Update(func(s *CompositeModelRouteUpsert) {
+		s.SetFallbackTargets(v)
+	})
+}
+
+// UpdateFallbackTargets sets the "fallback_targets" field to the value that was provided on create.
+func (u *CompositeModelRouteUpsertBulk) UpdateFallbackTargets() *CompositeModelRouteUpsertBulk {
+	return u.Update(func(s *CompositeModelRouteUpsert) {
+		s.UpdateFallbackTargets()
+	})
+}
+
+// ClearFallbackTargets clears the value of the "fallback_targets" field.
+func (u *CompositeModelRouteUpsertBulk) ClearFallbackTargets() *CompositeModelRouteUpsertBulk {
+	return u.Update(func(s *CompositeModelRouteUpsert) {
+		s.ClearFallbackTargets()
 	})
 }
 

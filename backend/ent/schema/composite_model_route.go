@@ -63,6 +63,10 @@ func (CompositeModelRoute) Fields() []ent.Field {
 			Optional().
 			Nillable().
 			SchemaType(map[string]string{dialect.Postgres: "text"}),
+		field.JSON("fallback_targets", []map[string]any{}).
+			Optional().
+			Default([]map[string]any{}).
+			Comment("Ordered fallback provider targets: [{platform, upstream_model}]."),
 	}
 }
 

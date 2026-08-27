@@ -45,6 +45,20 @@ type CompositeModelRoute struct {
 	Notes          string    `json:"notes"`
 	CreatedAt      time.Time `json:"created_at"`
 	UpdatedAt      time.Time `json:"updated_at"`
+	// FallbackTargets 主目标不可用时的后备平台列表（有序，先到先试）。
+	FallbackTargets []CompositeRouteTarget `json:"fallback_targets,omitempty"`
+}
+
+// CompositeRouteTarget 一个 fallback 目标平台及其上游真实模型。
+type CompositeRouteTarget struct {
+	Platform      string `json:"platform"`
+	UpstreamModel string `json:"upstream_model,omitempty"`
+}
+
+// CompositeRouteCandidate 组合路由解析出的一个候选平台（主目标或 fallback）。
+type CompositeRouteCandidate struct {
+	Platform      string
+	UpstreamModel string
 }
 
 type CompositeRoutePreviewRequest struct {
@@ -62,6 +76,8 @@ type CompositeRouteDecision struct {
 	Endpoint       string               `json:"endpoint"`
 	Route          *CompositeModelRoute `json:"route,omitempty"`
 	Reason         string               `json:"reason,omitempty"`
+	// Candidates 有序候选平台（主目标在前，fallback 依次在后）；单目标时为长度 1。
+	Candidates []CompositeRouteCandidate `json:"-"`
 }
 
 type CompositeRouteInput struct {
@@ -73,6 +89,7 @@ type CompositeRouteInput struct {
 	Priority       int
 	Enabled        bool
 	Notes          string
+	FallbackTargets []CompositeRouteTarget
 }
 
 type CompositeModelRouteRepository interface {
@@ -126,6 +143,17 @@ func normalizeCompositeRouteInput(input CompositeRouteInput) CompositeRouteInput
 	if input.UpstreamModel == "" && input.MatchType == CompositeRouteMatchExact {
 		input.UpstreamModel = input.PublicModel
 	}
+	// 规范化 fallback 目标平台和上游模型，并过滤空平台条目。
+	fallbacks := make([]CompositeRouteTarget, 0, len(input.FallbackTargets))
+	for _, t := range input.FallbackTargets {
+		t.Platform = strings.TrimSpace(t.Platform)
+		t.UpstreamModel = strings.TrimSpace(t.UpstreamModel)
+		if t.Platform == "" {
+			continue
+		}
+		fallbacks = append(fallbacks, t)
+	}
+	input.FallbackTargets = fallbacks
 	input.Notes = strings.TrimSpace(input.Notes)
 	return input
 }

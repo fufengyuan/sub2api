@@ -312,3 +312,64 @@ func TestCompositeGeminiTargetPlatformMiddlewareUsesPathRoute(t *testing.T) {
 
 	require.Equal(t, http.StatusNoContent, w.Code)
 }
+
+// 行为：多平台 fallback 路由时，middleware 不提前改写 body，并把候选列表写入 ctx。
+// 单值 target platform 仍指向主目标。
+// Source: plan/composite-multi-platform-fallback step 4
+func TestCompositeTargetPlatformMiddlewareMultiFallbackSkipsBodyRewrite(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	router := gin.New()
+	resolver := service.NewCompositeRouteResolver(compositeRouteRepoStub{
+		routes: []service.CompositeModelRoute{
+			{
+				ID:             1,
+				GroupID:        1,
+				PublicModel:    "deepseek-v4-flash",
+				MatchType:      service.CompositeRouteMatchExact,
+				TargetPlatform: service.PlatformTraeWork,
+				UpstreamModel:  "DeepSeek-V4-Flash",
+				Endpoint:       service.CompositeRouteEndpointAny,
+				Priority:       100,
+				Enabled:        true,
+				FallbackTargets: []service.CompositeRouteTarget{
+					{Platform: service.PlatformWorkBuddy, UpstreamModel: "deepseek-v4-flash"},
+				},
+			},
+		},
+	})
+	router.Use(gin.HandlerFunc(servermiddleware.APIKeyAuthMiddleware(func(c *gin.Context) {
+		groupID := int64(1)
+		c.Set(string(servermiddleware.ContextKeyAPIKey), &service.APIKey{
+			GroupID: &groupID,
+			Group:   &service.Group{ID: groupID, Platform: service.PlatformComposite},
+		})
+		c.Next()
+	})))
+	router.Use(compositeTargetPlatformMiddleware(resolver))
+	router.POST("/v1/chat/completions", func(c *gin.Context) {
+		// 主目标仍是 traework（单值兼容）
+		platform, ok := service.ResolvedTargetPlatformFromContext(c.Request.Context())
+		require.True(t, ok)
+		require.Equal(t, service.PlatformTraeWork, platform)
+
+		// 候选列表已写入 ctx（主目标 + fallback）
+		cands := service.CompositeCandidatesFromContext(c.Request.Context())
+		require.Len(t, cands, 2)
+		require.Equal(t, service.PlatformTraeWork, cands[0].Platform)
+		require.Equal(t, service.PlatformWorkBuddy, cands[1].Platform)
+
+		// body 不提前改写：仍是请求的对外模型名
+		body, err := io.ReadAll(c.Request.Body)
+		require.NoError(t, err)
+		require.JSONEq(t, `{"model":"deepseek-v4-flash"}`, string(body))
+		c.Status(http.StatusNoContent)
+	})
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"model":"deepseek-v4-flash"}`))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+
+	router.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusNoContent, w.Code)
+}

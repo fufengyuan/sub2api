@@ -10,6 +10,7 @@ import (
 
 	"entgo.io/ent/dialect/sql"
 	"entgo.io/ent/dialect/sql/sqlgraph"
+	"entgo.io/ent/dialect/sql/sqljson"
 	"entgo.io/ent/schema/field"
 	"github.com/Wei-Shaw/sub2api/ent/compositemodelroute"
 	"github.com/Wei-Shaw/sub2api/ent/group"
@@ -194,6 +195,24 @@ func (_u *CompositeModelRouteUpdate) ClearNotes() *CompositeModelRouteUpdate {
 	return _u
 }
 
+// SetFallbackTargets sets the "fallback_targets" field.
+func (_u *CompositeModelRouteUpdate) SetFallbackTargets(v []map[string]interface{}) *CompositeModelRouteUpdate {
+	_u.mutation.SetFallbackTargets(v)
+	return _u
+}
+
+// AppendFallbackTargets appends value to the "fallback_targets" field.
+func (_u *CompositeModelRouteUpdate) AppendFallbackTargets(v []map[string]interface{}) *CompositeModelRouteUpdate {
+	_u.mutation.AppendFallbackTargets(v)
+	return _u
+}
+
+// ClearFallbackTargets clears the value of the "fallback_targets" field.
+func (_u *CompositeModelRouteUpdate) ClearFallbackTargets() *CompositeModelRouteUpdate {
+	_u.mutation.ClearFallbackTargets()
+	return _u
+}
+
 // SetGroup sets the "group" edge to the Group entity.
 func (_u *CompositeModelRouteUpdate) SetGroup(v *Group) *CompositeModelRouteUpdate {
 	return _u.SetGroupID(v.ID)
@@ -335,6 +354,17 @@ func (_u *CompositeModelRouteUpdate) sqlSave(ctx context.Context) (_node int, er
 	}
 	if _u.mutation.NotesCleared() {
 		_spec.ClearField(compositemodelroute.FieldNotes, field.TypeString)
+	}
+	if value, ok := _u.mutation.FallbackTargets(); ok {
+		_spec.SetField(compositemodelroute.FieldFallbackTargets, field.TypeJSON, value)
+	}
+	if value, ok := _u.mutation.AppendedFallbackTargets(); ok {
+		_spec.AddModifier(func(u *sql.UpdateBuilder) {
+			sqljson.Append(u, compositemodelroute.FieldFallbackTargets, value)
+		})
+	}
+	if _u.mutation.FallbackTargetsCleared() {
+		_spec.ClearField(compositemodelroute.FieldFallbackTargets, field.TypeJSON)
 	}
 	if _u.mutation.GroupCleared() {
 		edge := &sqlgraph.EdgeSpec{
@@ -550,6 +580,24 @@ func (_u *CompositeModelRouteUpdateOne) ClearNotes() *CompositeModelRouteUpdateO
 	return _u
 }
 
+// SetFallbackTargets sets the "fallback_targets" field.
+func (_u *CompositeModelRouteUpdateOne) SetFallbackTargets(v []map[string]interface{}) *CompositeModelRouteUpdateOne {
+	_u.mutation.SetFallbackTargets(v)
+	return _u
+}
+
+// AppendFallbackTargets appends value to the "fallback_targets" field.
+func (_u *CompositeModelRouteUpdateOne) AppendFallbackTargets(v []map[string]interface{}) *CompositeModelRouteUpdateOne {
+	_u.mutation.AppendFallbackTargets(v)
+	return _u
+}
+
+// ClearFallbackTargets clears the value of the "fallback_targets" field.
+func (_u *CompositeModelRouteUpdateOne) ClearFallbackTargets() *CompositeModelRouteUpdateOne {
+	_u.mutation.ClearFallbackTargets()
+	return _u
+}
+
 // SetGroup sets the "group" edge to the Group entity.
 func (_u *CompositeModelRouteUpdateOne) SetGroup(v *Group) *CompositeModelRouteUpdateOne {
 	return _u.SetGroupID(v.ID)
@@ -721,6 +769,17 @@ func (_u *CompositeModelRouteUpdateOne) sqlSave(ctx context.Context) (_node *Com
 	}
 	if _u.mutation.NotesCleared() {
 		_spec.ClearField(compositemodelroute.FieldNotes, field.TypeString)
+	}
+	if value, ok := _u.mutation.FallbackTargets(); ok {
+		_spec.SetField(compositemodelroute.FieldFallbackTargets, field.TypeJSON, value)
+	}
+	if value, ok := _u.mutation.AppendedFallbackTargets(); ok {
+		_spec.AddModifier(func(u *sql.UpdateBuilder) {
+			sqljson.Append(u, compositemodelroute.FieldFallbackTargets, value)
+		})
+	}
+	if _u.mutation.FallbackTargetsCleared() {
+		_spec.ClearField(compositemodelroute.FieldFallbackTargets, field.TypeJSON)
 	}
 	if _u.mutation.GroupCleared() {
 		edge := &sqlgraph.EdgeSpec{

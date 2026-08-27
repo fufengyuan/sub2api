@@ -554,7 +554,11 @@ func compositeTargetPlatformMiddleware(resolver *service.CompositeRouteResolver)
 			}
 			if decision.Matched {
 				c.Request = c.Request.WithContext(service.WithCompositeRouteDecision(c.Request.Context(), decision))
-				if upstreamModel := strings.TrimSpace(decision.UpstreamModel); upstreamModel != "" && upstreamModel != model && gjson.ValidBytes(body) {
+				// 多平台 fallback：把候选列表写入 ctx，不在此处提前改写 body（不同平台真实模型不同），
+				// 由调度选中平台后按该候选 UpstreamModel 改写。单目标仍提前改写保持现状。
+				if len(decision.Candidates) > 1 {
+					c.Request = c.Request.WithContext(service.WithCompositeCandidates(c.Request.Context(), decision.Candidates))
+				} else if upstreamModel := strings.TrimSpace(decision.UpstreamModel); upstreamModel != "" && upstreamModel != model && gjson.ValidBytes(body) {
 					if _, modelPath := compositeJSONRequestModel(body); modelPath != "" {
 						if rewritten, rewriteErr := sjson.SetBytes(body, modelPath, upstreamModel); rewriteErr == nil {
 							body = rewritten
@@ -642,6 +646,9 @@ func compositeGeminiTargetPlatformMiddleware(resolver *service.CompositeRouteRes
 				}
 				if decision.Matched {
 					c.Request = c.Request.WithContext(service.WithCompositeRouteDecision(c.Request.Context(), decision))
+					if len(decision.Candidates) > 1 {
+						c.Request = c.Request.WithContext(service.WithCompositeCandidates(c.Request.Context(), decision.Candidates))
+					}
 				}
 			}
 			if _, resolved := service.ResolvedTargetPlatformFromContext(c.Request.Context()); !resolved {

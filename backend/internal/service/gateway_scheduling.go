@@ -56,8 +56,18 @@ func (s *GatewayService) SelectAccountForModelWithExclusions(ctx context.Context
 			if !ok {
 				return nil, fmt.Errorf("%w supporting model: %s (composite target platform unknown)", ErrNoAvailableAccounts, requestedModel)
 			}
-			platform = decision.TargetPlatform
-			requestedModel = decision.UpstreamModel
+			// 多平台候选：选余额优先的平台；单目标保持原行为。
+			if cands := CompositeCandidatesFromContext(ctx); len(cands) > 1 {
+				p, _, _ := s.selectBestCandidatePlatform(ctx, groupID, cands)
+				if p == "" {
+					return nil, ErrNoAvailableAccounts
+				}
+				platform = p
+				ctx = WithResolvedTargetPlatform(ctx, p)
+			} else {
+				platform = decision.TargetPlatform
+				requestedModel = decision.UpstreamModel
+			}
 			ctx = WithCompositeRouteDecision(ctx, decision)
 		}
 	} else {
@@ -211,21 +221,40 @@ func (s *GatewayService) SelectAccountWithLoadAwareness(ctx context.Context, gro
 		}
 	}
 
-	platform, hasForcePlatform, err := s.resolvePlatform(ctx, groupID, group, requestedModel)
-	if err != nil {
-		return nil, err
+	// composite 多平台 fallback：候选列表优先（按余额降序），逐平台尝试取健康账号。
+	routeCandidates := CompositeCandidatesFromContext(ctx)
+	var platform string
+	var upstreamModel string
+	var accounts []Account
+	var useMixed bool
+	var hasForcePlatform bool
+	if len(routeCandidates) > 1 {
+		platform, upstreamModel, accounts = s.selectBestCandidatePlatform(ctx, groupID, routeCandidates)
+		if platform == "" {
+			return nil, ErrNoAvailableAccounts
+		}
+		// 选中平台后重建计费/模型 ctx：覆盖 middleware 里用主目标写入的单值，
+		// 使计费消费方读到实际选中的平台与上游模型。
+		ctx = WithResolvedTargetPlatform(ctx, platform)
+		if upstreamModel != "" {
+			ctx = WithResolvedUpstreamModel(ctx, upstreamModel)
+		}
+	} else {
+		platform, hasForcePlatform, err = s.resolvePlatform(ctx, groupID, group, requestedModel)
+		if err != nil {
+			return nil, err
+		}
+		accounts, useMixed, err = s.listSchedulableAccounts(ctx, groupID, platform, hasForcePlatform)
+		if err != nil {
+			return nil, err
+		}
+		if len(accounts) == 0 {
+			return nil, ErrNoAvailableAccounts
+		}
 	}
 	preferOAuth := platform == PlatformGemini
 	if s.debugModelRoutingEnabled() && platform == PlatformAnthropic && requestedModel != "" {
 		logger.LegacyPrintf("service.gateway", "[ModelRoutingDebug] load-aware enabled: group_id=%v model=%s session=%s platform=%s", derefGroupID(groupID), requestedModel, shortSessionHash(sessionHash), platform)
-	}
-
-	accounts, useMixed, err := s.listSchedulableAccounts(ctx, groupID, platform, hasForcePlatform)
-	if err != nil {
-		return nil, err
-	}
-	if len(accounts) == 0 {
-		return nil, ErrNoAvailableAccounts
 	}
 	ctx = s.withWindowCostPrefetch(ctx, accounts)
 	ctx = s.withRPMPrefetch(ctx, accounts)
@@ -955,6 +984,57 @@ func (s *GatewayService) resolvePlatform(ctx context.Context, groupID *int64, gr
 		return group.Platform, false, nil
 	}
 	return PlatformAnthropic, false, nil
+}
+
+// selectBestCandidatePlatform 在 composite 多平台候选里，按平台内健康账号
+// creditsRemain 最大值降序，返回第一个有健康账号的平台（含该候选的上游模型）
+// 及该平台账号列表。无任何候选平台有健康账号时返回空 platform。
+func (s *GatewayService) selectBestCandidatePlatform(ctx context.Context, groupID *int64, candidates []CompositeRouteCandidate) (string, string, []Account) {
+	type scored struct {
+		candidate CompositeRouteCandidate
+		accounts  []Account
+		credits   int64
+	}
+	var picks []scored
+	for _, cand := range candidates {
+		if cand.Platform == "" {
+			continue
+		}
+		accounts, _, err := s.listSchedulableAccounts(ctx, groupID, cand.Platform, false)
+		if err != nil || len(accounts) == 0 {
+			continue
+		}
+		var max int64
+		for _, acc := range accounts {
+			if c, ok := accountCreditsRemain(acc); ok && c > max {
+				max = c
+			}
+		}
+		picks = append(picks, scored{candidate: cand, accounts: accounts, credits: max})
+	}
+	if len(picks) == 0 {
+		return "", "", nil
+	}
+	// 按余额降序稳定排序；余额相同保持候选顺序。
+	sort.SliceStable(picks, func(i, j int) bool { return picks[i].credits > picks[j].credits })
+	return picks[0].candidate.Platform, picks[0].candidate.UpstreamModel, picks[0].accounts
+}
+
+// accountCreditsRemain 读取账号 credentials.creditsRemain（int64/float64 兼容）。
+func accountCreditsRemain(acc Account) (int64, bool) {
+	if acc.Credentials == nil {
+		return 0, false
+	}
+	switch v := acc.Credentials["creditsRemain"].(type) {
+	case int64:
+		return v, true
+	case float64:
+		return int64(v), true
+	case int:
+		return int64(v), true
+	default:
+		return 0, false
+	}
 }
 
 func (s *GatewayService) listSchedulableAccounts(ctx context.Context, groupID *int64, platform string, hasForcePlatform bool) ([]Account, bool, error) {

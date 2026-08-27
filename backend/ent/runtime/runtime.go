@@ -925,6 +925,10 @@ func init() {
 	compositemodelrouteDescEnabled := compositemodelrouteFields[7].Descriptor()
 	// compositemodelroute.DefaultEnabled holds the default value on creation for the enabled field.
 	compositemodelroute.DefaultEnabled = compositemodelrouteDescEnabled.Default.(bool)
+	// compositemodelrouteDescFallbackTargets is the schema descriptor for fallback_targets field.
+	compositemodelrouteDescFallbackTargets := compositemodelrouteFields[9].Descriptor()
+	// compositemodelroute.DefaultFallbackTargets holds the default value on creation for the fallback_targets field.
+	compositemodelroute.DefaultFallbackTargets = compositemodelrouteDescFallbackTargets.Default.([]map[string]interface{})
 	errorpassthroughruleMixin := schema.ErrorPassthroughRule{}.Mixin()
 	errorpassthroughruleMixinFields0 := errorpassthroughruleMixin[0].Fields()
 	_ = errorpassthroughruleMixinFields0

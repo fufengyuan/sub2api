@@ -19707,27 +19707,29 @@ func (m *ChannelMonitorRequestTemplateMutation) ResetEdge(name string) error {
 // CompositeModelRouteMutation represents an operation that mutates the CompositeModelRoute nodes in the graph.
 type CompositeModelRouteMutation struct {
 	config
-	op              Op
-	typ             string
-	id              *int64
-	created_at      *time.Time
-	updated_at      *time.Time
-	deleted_at      *time.Time
-	public_model    *string
-	match_type      *string
-	target_platform *string
-	upstream_model  *string
-	endpoint        *string
-	priority        *int
-	addpriority     *int
-	enabled         *bool
-	notes           *string
-	clearedFields   map[string]struct{}
-	group           *int64
-	clearedgroup    bool
-	done            bool
-	oldValue        func(context.Context) (*CompositeModelRoute, error)
-	predicates      []predicate.CompositeModelRoute
+	op                     Op
+	typ                    string
+	id                     *int64
+	created_at             *time.Time
+	updated_at             *time.Time
+	deleted_at             *time.Time
+	public_model           *string
+	match_type             *string
+	target_platform        *string
+	upstream_model         *string
+	endpoint               *string
+	priority               *int
+	addpriority            *int
+	enabled                *bool
+	notes                  *string
+	fallback_targets       *[]map[string]interface{}
+	appendfallback_targets []map[string]interface{}
+	clearedFields          map[string]struct{}
+	group                  *int64
+	clearedgroup           bool
+	done                   bool
+	oldValue               func(context.Context) (*CompositeModelRoute, error)
+	predicates             []predicate.CompositeModelRoute
 }
 
 var _ ent.Mutation = (*CompositeModelRouteMutation)(nil)
@@ -20306,6 +20308,71 @@ func (m *CompositeModelRouteMutation) ResetNotes() {
 	delete(m.clearedFields, compositemodelroute.FieldNotes)
 }
 
+// SetFallbackTargets sets the "fallback_targets" field.
+func (m *CompositeModelRouteMutation) SetFallbackTargets(value []map[string]interface{}) {
+	m.fallback_targets = &value
+	m.appendfallback_targets = nil
+}
+
+// FallbackTargets returns the value of the "fallback_targets" field in the mutation.
+func (m *CompositeModelRouteMutation) FallbackTargets() (r []map[string]interface{}, exists bool) {
+	v := m.fallback_targets
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldFallbackTargets returns the old "fallback_targets" field's value of the CompositeModelRoute entity.
+// If the CompositeModelRoute object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *CompositeModelRouteMutation) OldFallbackTargets(ctx context.Context) (v []map[string]interface{}, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldFallbackTargets is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldFallbackTargets requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldFallbackTargets: %w", err)
+	}
+	return oldValue.FallbackTargets, nil
+}
+
+// AppendFallbackTargets adds value to the "fallback_targets" field.
+func (m *CompositeModelRouteMutation) AppendFallbackTargets(value []map[string]interface{}) {
+	m.appendfallback_targets = append(m.appendfallback_targets, value...)
+}
+
+// AppendedFallbackTargets returns the list of values that were appended to the "fallback_targets" field in this mutation.
+func (m *CompositeModelRouteMutation) AppendedFallbackTargets() ([]map[string]interface{}, bool) {
+	if len(m.appendfallback_targets) == 0 {
+		return nil, false
+	}
+	return m.appendfallback_targets, true
+}
+
+// ClearFallbackTargets clears the value of the "fallback_targets" field.
+func (m *CompositeModelRouteMutation) ClearFallbackTargets() {
+	m.fallback_targets = nil
+	m.appendfallback_targets = nil
+	m.clearedFields[compositemodelroute.FieldFallbackTargets] = struct{}{}
+}
+
+// FallbackTargetsCleared returns if the "fallback_targets" field was cleared in this mutation.
+func (m *CompositeModelRouteMutation) FallbackTargetsCleared() bool {
+	_, ok := m.clearedFields[compositemodelroute.FieldFallbackTargets]
+	return ok
+}
+
+// ResetFallbackTargets resets all changes to the "fallback_targets" field.
+func (m *CompositeModelRouteMutation) ResetFallbackTargets() {
+	m.fallback_targets = nil
+	m.appendfallback_targets = nil
+	delete(m.clearedFields, compositemodelroute.FieldFallbackTargets)
+}
+
 // ClearGroup clears the "group" edge to the Group entity.
 func (m *CompositeModelRouteMutation) ClearGroup() {
 	m.clearedgroup = true
@@ -20367,7 +20434,7 @@ func (m *CompositeModelRouteMutation) Type() string {
 // order to get all numeric fields that were incremented/decremented, call
 // AddedFields().
 func (m *CompositeModelRouteMutation) Fields() []string {
-	fields := make([]string, 0, 12)
+	fields := make([]string, 0, 13)
 	if m.created_at != nil {
 		fields = append(fields, compositemodelroute.FieldCreatedAt)
 	}
@@ -20404,6 +20471,9 @@ func (m *CompositeModelRouteMutation) Fields() []string {
 	if m.notes != nil {
 		fields = append(fields, compositemodelroute.FieldNotes)
 	}
+	if m.fallback_targets != nil {
+		fields = append(fields, compositemodelroute.FieldFallbackTargets)
+	}
 	return fields
 }
 
@@ -20436,6 +20506,8 @@ func (m *CompositeModelRouteMutation) Field(name string) (ent.Value, bool) {
 		return m.Enabled()
 	case compositemodelroute.FieldNotes:
 		return m.Notes()
+	case compositemodelroute.FieldFallbackTargets:
+		return m.FallbackTargets()
 	}
 	return nil, false
 }
@@ -20469,6 +20541,8 @@ func (m *CompositeModelRouteMutation) OldField(ctx context.Context, name string)
 		return m.OldEnabled(ctx)
 	case compositemodelroute.FieldNotes:
 		return m.OldNotes(ctx)
+	case compositemodelroute.FieldFallbackTargets:
+		return m.OldFallbackTargets(ctx)
 	}
 	return nil, fmt.Errorf("unknown CompositeModelRoute field %s", name)
 }
@@ -20562,6 +20636,13 @@ func (m *CompositeModelRouteMutation) SetField(name string, value ent.Value) err
 		}
 		m.SetNotes(v)
 		return nil
+	case compositemodelroute.FieldFallbackTargets:
+		v, ok := value.([]map[string]interface{})
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetFallbackTargets(v)
+		return nil
 	}
 	return fmt.Errorf("unknown CompositeModelRoute field %s", name)
 }
@@ -20613,6 +20694,9 @@ func (m *CompositeModelRouteMutation) ClearedFields() []string {
 	if m.FieldCleared(compositemodelroute.FieldNotes) {
 		fields = append(fields, compositemodelroute.FieldNotes)
 	}
+	if m.FieldCleared(compositemodelroute.FieldFallbackTargets) {
+		fields = append(fields, compositemodelroute.FieldFallbackTargets)
+	}
 	return fields
 }
 
@@ -20632,6 +20716,9 @@ func (m *CompositeModelRouteMutation) ClearField(name string) error {
 		return nil
 	case compositemodelroute.FieldNotes:
 		m.ClearNotes()
+		return nil
+	case compositemodelroute.FieldFallbackTargets:
+		m.ClearFallbackTargets()
 		return nil
 	}
 	return fmt.Errorf("unknown CompositeModelRoute nullable field %s", name)
@@ -20676,6 +20763,9 @@ func (m *CompositeModelRouteMutation) ResetField(name string) error {
 		return nil
 	case compositemodelroute.FieldNotes:
 		m.ResetNotes()
+		return nil
+	case compositemodelroute.FieldFallbackTargets:
+		m.ResetFallbackTargets()
 		return nil
 	}
 	return fmt.Errorf("unknown CompositeModelRoute field %s", name)

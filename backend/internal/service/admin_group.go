@@ -212,6 +212,11 @@ func compositeRouteFromInput(groupID int64, input CompositeRouteInput) (*Composi
 	if !isConcreteRequestPlatform(input.TargetPlatform) {
 		return nil, fmt.Errorf("target_platform must be a concrete provider")
 	}
+	for _, t := range input.FallbackTargets {
+		if !isConcreteRequestPlatform(t.Platform) {
+			return nil, fmt.Errorf("fallback target %q must be a concrete provider", t.Platform)
+		}
+	}
 	if input.Priority == 0 {
 		input.Priority = 100
 	}
@@ -225,6 +230,7 @@ func compositeRouteFromInput(groupID int64, input CompositeRouteInput) (*Composi
 		Priority:       input.Priority,
 		Enabled:        input.Enabled,
 		Notes:          input.Notes,
+		FallbackTargets: append([]CompositeRouteTarget(nil), input.FallbackTargets...),
 	}, nil
 }
 
