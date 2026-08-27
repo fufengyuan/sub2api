@@ -280,6 +280,39 @@ export async function applyOAuthCredentials(
 }
 
 /**
+ * Start a CN upstream (WorkBuddy / TraeWork / Qoder) OAuth authorization flow.
+ * @param platform - One of 'workbuddy' | 'traework' | 'qoder'
+ * @param redirectBase - The redirect base used by the callback (e.g. window.location.origin)
+ * @returns Authorize URL and state token used for polling
+ */
+export async function startCnOAuth(platform: string, redirectBase: string): Promise<{
+  authorize_url: string
+  state: string
+}> {
+  const { data } = await apiClient.post<{ authorize_url: string; state: string }>('/admin/cn-oauth/start', {
+    platform,
+    redirect_base: redirectBase
+  })
+  return data
+}
+
+/**
+ * Poll a CN upstream OAuth authorization state.
+ * @param state - The state token returned by startCnOAuth
+ * @returns Current authorization status
+ */
+export async function getCnOAuthStatus(state: string): Promise<{
+  status: 'pending' | 'used' | 'expired' | 'not_found'
+  platform?: string
+}> {
+  const { data } = await apiClient.get<{
+    status: 'pending' | 'used' | 'expired' | 'not_found'
+    platform?: string
+  }>('/admin/cn-oauth/status', { params: { state } })
+  return data
+}
+
+/**
  * Get account usage statistics
  * @param id - Account ID
  * @param days - Number of days (default: 30)
@@ -1016,6 +1049,8 @@ export const accountsAPI = {
   generateAuthUrl,
   exchangeCode,
   refreshOpenAIToken,
+  startCnOAuth,
+  getCnOAuthStatus,
   batchCreate,
   batchUpdateCredentials,
   bulkUpdate,

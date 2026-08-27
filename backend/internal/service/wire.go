@@ -7,6 +7,7 @@ import (
 	"time"
 
 	dbent "github.com/Wei-Shaw/sub2api/ent"
+	"github.com/Wei-Shaw/sub2api/internal/cnupstream/traework"
 	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/Wei-Shaw/sub2api/internal/payment"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/antigravity"
@@ -24,6 +25,13 @@ func ProvideGrokOAuthService(proxyRepo ProxyRepository, oauthClient GrokOAuthCli
 		svc = svc.WithSessionStore(xai.NewRedisSessionStore(redisClient))
 	}
 	return svc
+}
+
+// ProvideCnOAuthService 构造三渠道一键 OAuth 授权建号服务（仅 traework 支持）。
+// 建号器取自 AdminService（CreateAccount），token 交换器取 traework 客户端，
+// state 存储使用本地内存实现。
+func ProvideCnOAuthService(creator AdminAccountCreator) *CnOAuthService {
+	return NewCnOAuthService(creator, traework.New(), NewInMemoryOAuthStateStore())
 }
 
 // BuildInfo contains build information
@@ -855,6 +863,8 @@ var ProviderSet = wire.NewSet(
 	ProvideCNProviderBalanceCheckService,
 	ProvideCnUpstreamService,
 	ProvideCnUpstreamSchedulerService,
+	wire.Bind(new(AdminAccountCreator), new(AdminService)),
+	ProvideCnOAuthService,
 	ProvideClaudeTokenProvider,
 	NewAntigravityGatewayService,
 	ProvideRateLimitService,

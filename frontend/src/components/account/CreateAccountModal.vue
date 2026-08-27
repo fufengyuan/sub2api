@@ -231,6 +231,128 @@
             <PlatformIcon platform="traework" size="sm" />
             TraeWork
           </button>
+          <button
+            type="button"
+            @click="selectDomesticToolPlatform('qoder')"
+            :class="[
+              'flex flex-1 items-center justify-center gap-2 rounded-md px-4 py-2.5 text-sm font-medium transition-all',
+              form.platform === 'qoder'
+                ? 'bg-white text-emerald-600 shadow-sm dark:bg-dark-600 dark:text-emerald-400'
+                : 'text-gray-600 hover:text-gray-900 dark:text-gray-400 dark:hover:text-gray-200'
+            ]"
+          >
+            <PlatformIcon platform="qoder" size="sm" />
+            {{ t('admin.accounts.domesticTool.platformQoder') }}
+          </button>
+        </div>
+      </div>
+
+      <!-- Account Type Selection (WorkBuddy / TraeWork / Qoder) -->
+      <div v-if="isDomesticToolPlatform" class="mt-4">
+        <label class="input-label">{{ t('admin.accounts.accountType') }}</label>
+        <p class="input-hint">{{ t('admin.accounts.domesticTool.accountTypeHint') }}</p>
+        <div class="mt-2 grid grid-cols-2 gap-3" data-tour="account-form-type">
+          <button
+            type="button"
+            :class="[
+              'flex items-center gap-3 rounded-lg border-2 p-3 text-left transition-all',
+              accountCategory === 'oauth-based'
+                ? 'border-emerald-500 bg-emerald-50 dark:bg-emerald-900/20'
+                : 'border-gray-200 hover:border-emerald-300 dark:border-dark-600 dark:hover:border-emerald-700'
+            ]"
+            @click="accountCategory = 'oauth-based'"
+          >
+            <div
+              :class="[
+                'flex h-8 w-8 shrink-0 items-center justify-center rounded-lg',
+                accountCategory === 'oauth-based'
+                  ? 'bg-emerald-500 text-white'
+                  : 'bg-gray-100 text-gray-500 dark:bg-dark-600 dark:text-gray-400'
+              ]"
+            >
+              <Icon name="key" size="sm" />
+            </div>
+            <div>
+              <span class="block text-sm font-medium text-gray-900 dark:text-white">{{ t('admin.accounts.domesticTool.oauthType') }}</span>
+              <span class="text-xs text-gray-500 dark:text-gray-400">{{ t('admin.accounts.domesticTool.accountTypeHint') }}</span>
+            </div>
+          </button>
+          <button
+            type="button"
+            :class="[
+              'flex items-center gap-3 rounded-lg border-2 p-3 text-left transition-all',
+              accountCategory === 'apikey'
+                ? 'border-emerald-500 bg-emerald-50 dark:bg-emerald-900/20'
+                : 'border-gray-200 hover:border-emerald-300 dark:border-dark-600 dark:hover:border-emerald-700'
+            ]"
+            @click="accountCategory = 'apikey'"
+          >
+            <div
+              :class="[
+                'flex h-8 w-8 shrink-0 items-center justify-center rounded-lg',
+                accountCategory === 'apikey'
+                  ? 'bg-emerald-500 text-white'
+                  : 'bg-gray-100 text-gray-500 dark:bg-dark-600 dark:text-gray-400'
+              ]"
+            >
+              <Icon name="terminal" size="sm" />
+            </div>
+            <div>
+              <span class="block text-sm font-medium text-gray-900 dark:text-white">{{ t('admin.accounts.domesticTool.apikeyType') }}</span>
+              <span class="text-xs text-gray-500 dark:text-gray-400">{{ t('admin.accounts.domesticTool.accountTypeHint') }}</span>
+            </div>
+          </button>
+        </div>
+
+        <!-- 国内工具 OAuth 凭证表单 -->
+        <div v-if="accountCategory === 'oauth-based'" class="mt-4 space-y-4">
+          <button
+            type="button"
+            :disabled="domesticOAuthAuthorizing"
+            class="inline-flex w-full items-center justify-center gap-2 rounded-lg bg-emerald-600 px-4 py-2.5 text-sm font-medium text-white transition-all hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-60"
+            @click="handleDomesticOneClickAuth"
+          >
+            <svg
+              v-if="domesticOAuthAuthorizing"
+              class="h-4 w-4 animate-spin"
+              fill="none"
+              viewBox="0 0 24 24"
+            >
+              <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+              <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+            </svg>
+            {{ domesticOAuthAuthorizing ? t('admin.accounts.domesticTool.authorizing') : t('admin.accounts.domesticTool.oneClickAuth') }}
+          </button>
+
+          <div>
+            <label class="input-label">{{ t('admin.accounts.domesticTool.pasteAuthJson') }}</label>
+            <textarea
+              v-model="domesticAuthJson"
+              rows="3"
+              class="input font-mono"
+              :placeholder="t('admin.accounts.domesticTool.pasteAuthJsonPlaceholder')"
+            ></textarea>
+            <button
+              type="button"
+              class="mt-2 inline-flex items-center gap-1 rounded-lg border border-gray-200 px-3 py-1.5 text-sm text-gray-700 transition-all hover:bg-gray-50 dark:border-dark-600 dark:text-gray-300 dark:hover:bg-dark-600"
+              @click="parseDomesticAuthJson"
+            >
+              {{ t('admin.accounts.domesticTool.parseJson') }}
+            </button>
+          </div>
+
+          <div class="grid grid-cols-1 gap-3 sm:grid-cols-2">
+            <div v-for="field in domesticOAuthFields" :key="field.key">
+              <label class="input-label">{{ t(`admin.accounts.domesticTool.${field.labelKey}`) }}</label>
+              <input
+                v-model="domesticOAuth[field.key]"
+                type="text"
+                class="input font-mono"
+                :data-testid="`domestic-oauth-${field.key}`"
+              />
+            </div>
+          </div>
+          <p class="input-hint">{{ t('admin.accounts.domesticTool.oauthCredentialHint') }}</p>
         </div>
       </div>
 
@@ -4072,12 +4194,118 @@ function selectCNPlatform(platform: 'kimi' | 'zhipu' | 'deepseek') {
   apiKeyBaseUrl.value = defaultCNBaseUrl(platform, accountMode.value, apiProtocol.value)
   resetAdaptiveBaseUrls(platform, accountMode.value)
 }
-// 切换国内工具平台（WorkBuddy / TraeWork）：强制 apikey 类型，无协议选项。
-function selectDomesticToolPlatform(platform: 'workbuddy' | 'traework') {
+// 国内工具平台（WorkBuddy / TraeWork / Qoder）
+const isDomesticToolPlatform = computed(
+  () => form.platform === 'workbuddy' || form.platform === 'traework' || form.platform === 'qoder'
+)
+// 切换国内工具平台（WorkBuddy / TraeWork / Qoder）：提供 OAuth / API Key 两种方式。
+// 默认走 OAuth（粘贴凭证或一键授权），不再强制 apikey；无协议选项。
+function selectDomesticToolPlatform(platform: 'workbuddy' | 'traework' | 'qoder') {
   form.platform = platform
-  form.type = 'apikey'
-  accountCategory.value = 'apikey'
+  accountCategory.value = 'oauth-based'
   apiKeyBaseUrl.value = ''
+}
+
+// ── 国内工具 OAuth 凭证（驼峰键，与后端 hydrateAuth 一致）──
+const DOMESTIC_OAUTH_FIELDS = [
+  { key: 'accessToken', labelKey: 'accessToken' },
+  { key: 'refreshToken', labelKey: 'refreshToken' },
+  { key: 'machineId', labelKey: 'machineId' },
+  { key: 'deviceId', labelKey: 'deviceId' },
+  { key: 'domain', labelKey: 'domain' },
+  { key: 'apiHost', labelKey: 'apiHost' },
+  { key: 'machineToken', labelKey: 'machineToken' },
+  { key: 'machineType', labelKey: 'machineType' },
+  { key: 'uid', labelKey: 'uid' },
+  { key: 'nickname', labelKey: 'nickname' },
+  { key: 'enterpriseId', labelKey: 'enterpriseId' }
+] as const
+const domesticOAuth = reactive<Record<string, string>>(
+  Object.fromEntries(DOMESTIC_OAUTH_FIELDS.map(({ key }) => [key, ''])) as Record<string, string>
+)
+const domesticOAuthFields = DOMESTIC_OAUTH_FIELDS.map((f) => ({ ...f }))
+const domesticAuthJson = ref('')
+const domesticOAuthAuthorizing = ref(false)
+
+// 解析粘贴的 auth JSON 回填字段（保持未出现在 JSON 中的字段原值）
+const parseDomesticAuthJson = () => {
+  const text = domesticAuthJson.value.trim()
+  if (!text) return
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(text)
+  } catch {
+    appStore.showError(t('admin.accounts.domesticTool.authJsonInvalid'))
+    return
+  }
+  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+    appStore.showError(t('admin.accounts.domesticTool.authJsonInvalid'))
+    return
+  }
+  const obj = parsed as Record<string, unknown>
+  for (const { key } of DOMESTIC_OAUTH_FIELDS) {
+    const value = obj[key]
+    if (value != null) domesticOAuth[key] = String(value)
+  }
+}
+
+// 收集已填字段为跨渠道 OAuth 凭证（仅含非空值，键为驼峰）
+const buildDomesticOAuthCredentials = (): Record<string, string> => {
+  const credentials: Record<string, string> = {}
+  for (const { key } of DOMESTIC_OAUTH_FIELDS) {
+    const value = domesticOAuth[key].trim()
+    if (value) credentials[key] = value
+  }
+  return credentials
+}
+
+// 提交创建：校验名称 + 至少一个关键凭证后建号（type=oauth）
+const handleDomesticOAuthCreate = async () => {
+  if (!form.name.trim()) {
+    appStore.showError(t('admin.accounts.pleaseEnterAccountName'))
+    return
+  }
+  const credentials = buildDomesticOAuthCredentials()
+  if (!credentials.accessToken && !credentials.refreshToken && !credentials.machineToken) {
+    appStore.showError(t('admin.accounts.domesticTool.oauthCredentialHint'))
+    return
+  }
+  await createAccountAndFinish(form.platform, 'oauth', credentials)
+}
+
+// 一键授权：调 /admin/cn-oauth/start 打开授权页并轮询状态（used 视为成功即刷新）
+const handleDomesticOneClickAuth = async () => {
+  if (domesticOAuthAuthorizing.value) return
+  domesticOAuthAuthorizing.value = true
+  try {
+    const res = await adminAPI.accounts.startCnOAuth(form.platform, window.location.origin)
+    window.open(res.authorize_url, '_blank', 'noopener,noreferrer')
+    appStore.showInfo(t('admin.accounts.domesticTool.oauthStarting'))
+    const MAX_POLL_ATTEMPTS = 120
+    for (let attempt = 1; attempt <= MAX_POLL_ATTEMPTS; attempt++) {
+      await new Promise((resolve) => setTimeout(resolve, 2500))
+      const status = await adminAPI.accounts.getCnOAuthStatus(res.state)
+      if (status.status === 'used') {
+        appStore.showSuccess(t('admin.accounts.domesticTool.oauthSuccess'))
+        emit('created')
+        return
+      }
+      if (status.status === 'expired') {
+        appStore.showError(t('admin.accounts.domesticTool.oauthExpired'))
+        return
+      }
+      if (status.status === 'not_found') {
+        appStore.showError(t('admin.accounts.domesticTool.oauthNotFound'))
+        return
+      }
+      // pending → 继续轮询
+    }
+    appStore.showError(t('admin.accounts.domesticTool.oauthTimeout'))
+  } catch (error: any) {
+    appStore.showError(error?.message || t('admin.accounts.domesticTool.authorizeFailed'))
+  } finally {
+    domesticOAuthAuthorizing.value = false
+  }
 }
 // 账号类型 / 协议变更时同步默认 base url。
 watch(accountMode, (mode, previousMode) => {
@@ -4512,6 +4740,10 @@ const form = reactive({
 
 // Helper to check if current type needs OAuth flow
 const isOAuthFlow = computed(() => {
+  // 国内工具平台：OAuth 凭证在步骤 1 直接粘贴/一键授权，不走步骤 2 授权流程
+  if (isDomesticToolPlatform.value) {
+    return false
+  }
   // Antigravity upstream 类型不需要 OAuth 流程
   if (form.platform === 'antigravity' && antigravityAccountType.value === 'upstream') {
     return false
@@ -5069,6 +5301,11 @@ const resetForm = () => {
   adaptiveBaseUrls.value = { chat_completions: '', anthropic: '', responses: '' }
   apiKeyBaseUrl.value = 'https://api.anthropic.com'
   apiKeyValue.value = ''
+  domesticAuthJson.value = ''
+  for (const { key } of DOMESTIC_OAUTH_FIELDS) {
+    domesticOAuth[key] = ''
+  }
+  domesticOAuthAuthorizing.value = false
   upstreamBillingAutoProbeEnabled.value = true
   editQuotaLimit.value = null
   editQuotaDailyLimit.value = null
@@ -5365,6 +5602,11 @@ const handleVertexServiceAccountDrop = async (event: DragEvent) => {
 }
 
 const handleSubmit = async () => {
+  // 国内工具平台 OAuth：直接以粘贴字段建号（type=oauth），不走步骤 2 授权流程
+  if (isDomesticToolPlatform.value && accountCategory.value === 'oauth-based') {
+    await handleDomesticOAuthCreate()
+    return
+  }
   // For OAuth-based type, handle OAuth flow (goes to step 2)
   if (isOAuthFlow.value) {
     if (!isGrokSSOInputMethod.value && !form.name.trim()) {

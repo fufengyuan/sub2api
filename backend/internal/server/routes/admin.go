@@ -61,6 +61,9 @@ func RegisterAdminRoutes(
 		// 国产供应商（kimi/zhipu/deepseek）额度与余额
 		registerCNProviderRoutes(admin, h)
 
+		// 三渠道一键 OAuth 授权建号（traework）
+		registerCnOAuthRoutes(admin, h)
+
 		// 代理管理
 		registerProxyRoutes(admin, h, stepUpAuth)
 
@@ -493,6 +496,15 @@ func registerCNProviderRoutes(admin *gin.RouterGroup, h *handler.Handlers) {
 		cn.GET("/accounts/:id/quota", h.Admin.CNProvider.QueryQuota)
 		// payg 账号余额（kimi/deepseek；zhipu 无余额端点）。
 		cn.GET("/accounts/:id/balance", h.Admin.CNProvider.QueryBalance)
+	}
+}
+
+// registerCnOAuthRoutes 注册三渠道（workbuddy/traework/qoder）一键 OAuth 授权建号路由。
+func registerCnOAuthRoutes(admin *gin.RouterGroup, h *handler.Handlers) {
+	cn := admin.Group("/cn-oauth")
+	{
+		cn.POST("/start", h.Admin.CNOAuth.Start)
+		cn.GET("/status", h.Admin.CNOAuth.Status)
 	}
 }
 

@@ -1199,6 +1199,22 @@
         <p class="input-hint">{{ t('admin.accounts.antigravityProjectIdHint') }}</p>
       </div>
 
+      <!-- 国内工具平台（WorkBuddy / TraeWork / Qoder）OAuth 凭证编辑 -->
+      <div v-if="isDomesticOAuthAccount" class="space-y-4">
+        <div class="grid grid-cols-1 gap-3 sm:grid-cols-2">
+          <div v-for="field in DOMESTIC_OAUTH_FIELD_LIST" :key="field.key">
+            <label class="input-label">{{ t(`admin.accounts.domesticTool.${field.labelKey}`) }}</label>
+            <input
+              v-model="editDomesticOAuth[field.key]"
+              type="text"
+              class="input font-mono"
+              :data-testid="`domestic-oauth-${field.key}`"
+            />
+          </div>
+        </div>
+        <p class="input-hint">{{ t('admin.accounts.domesticTool.editHint') }}</p>
+      </div>
+
       <!-- Antigravity model restriction (applies to all antigravity types) -->
       <!-- Antigravity 只支持模型映射模式，不支持白名单模式 -->
       <div v-if="account.platform === 'antigravity'" class="border-t border-gray-200 pt-4 dark:border-dark-600">
@@ -2916,6 +2932,30 @@ const submitting = ref(false)
 const editBaseUrl = ref('https://api.anthropic.com')
 const editApiKey = ref('')
 
+// ── 国内工具平台（WorkBuddy / TraeWork / Qoder）OAuth 凭证编辑 ──
+const DOMESTIC_OAUTH_FIELD_LIST: Array<{ key: string; labelKey: string }> = [
+  { key: 'accessToken', labelKey: 'accessToken' },
+  { key: 'refreshToken', labelKey: 'refreshToken' },
+  { key: 'machineId', labelKey: 'machineId' },
+  { key: 'deviceId', labelKey: 'deviceId' },
+  { key: 'domain', labelKey: 'domain' },
+  { key: 'apiHost', labelKey: 'apiHost' },
+  { key: 'machineToken', labelKey: 'machineToken' },
+  { key: 'machineType', labelKey: 'machineType' },
+  { key: 'uid', labelKey: 'uid' },
+  { key: 'nickname', labelKey: 'nickname' },
+  { key: 'enterpriseId', labelKey: 'enterpriseId' }
+]
+const isDomesticOAuthAccount = computed(() =>
+  props.account?.type === 'oauth' &&
+  (props.account.platform === 'workbuddy' ||
+    props.account.platform === 'traework' ||
+    props.account.platform === 'qoder')
+)
+const editDomesticOAuth = reactive<Record<string, string>>(
+  Object.fromEntries(DOMESTIC_OAUTH_FIELD_LIST.map(({ key }) => [key, ''])) as Record<string, string>
+)
+
 // ── 国产供应商（Kimi / Zhipu / DeepSeek）account_mode / api_protocol 编辑 ──
 // account_mode 决定额度/余额监控路径，api_protocol 决定转发端点与格式；
 // 二者均可修正（早期创建的账号可能存错默认值），切换时重置 base_url 预置。
@@ -3958,6 +3998,11 @@ const syncFormFromAccount = (newAccount: Account | null) => {
 
     // Load model mappings for service_account
     loadModelRestrictionFromMapping(credentials.model_mapping as Record<string, unknown> | undefined)
+  } else if (newAccount.type === 'oauth' && (newAccount.platform === 'workbuddy' || newAccount.platform === 'traework' || newAccount.platform === 'qoder') && newAccount.credentials) {
+    const credentials = newAccount.credentials as Record<string, unknown>
+    for (const { key } of DOMESTIC_OAUTH_FIELD_LIST) {
+      editDomesticOAuth[key] = typeof credentials[key] === 'string' ? (credentials[key] as string) : ''
+    }
   } else {
     const platformDefaultUrl =
       newAccount.platform === 'openai'
@@ -4778,6 +4823,26 @@ const handleSubmit = async () => {
         newCredentials.model_mapping = modelMapping
       } else {
         delete newCredentials.model_mapping
+      }
+
+      applyInterceptWarmup(newCredentials, interceptWarmupRequests.value, 'edit')
+      applyAccountSchedulingThresholdOverridePatch(newCredentials, currentCredentials)
+      if (!applyTempUnschedConfig(newCredentials)) {
+        return
+      }
+
+      updatePayload.credentials = newCredentials
+    } else if (isDomesticOAuthAccount.value) {
+      // 国内工具平台 OAuth：仅覆写用户填写的字段，留空保持原值（凭证可能带脱敏标记）
+      const currentCredentials = (props.account.credentials as Record<string, unknown>) || {}
+      const newCredentials: Record<string, unknown> = { ...currentCredentials }
+      for (const { key } of DOMESTIC_OAUTH_FIELD_LIST) {
+        const value = editDomesticOAuth[key].trim()
+        if (value) {
+          newCredentials[key] = value
+        } else {
+          delete newCredentials[key]
+        }
       }
 
       applyInterceptWarmup(newCredentials, interceptWarmupRequests.value, 'edit')
