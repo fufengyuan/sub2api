@@ -657,6 +657,11 @@ export type CompositeRouteEndpoint =
 
 export type CompositeRouteSource = 'route' | 'detector' | string
 
+export interface CompositeRouteTarget {
+  platform: Exclude<GroupPlatform, 'composite'>
+  upstream_model?: string
+}
+
 export interface CompositeModelRoute {
   id: number
   group_id: number
@@ -668,6 +673,7 @@ export interface CompositeModelRoute {
   priority: number
   enabled: boolean
   notes: string
+  fallback_targets?: CompositeRouteTarget[]
   created_at?: string
   updated_at?: string
 }
@@ -681,6 +687,7 @@ export interface CompositeModelRouteInput {
   priority?: number
   enabled?: boolean
   notes?: string
+  fallback_targets?: CompositeRouteTarget[]
 }
 
 export interface CompositeRoutePreviewRequest {
