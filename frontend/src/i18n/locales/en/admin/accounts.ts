@@ -977,6 +977,7 @@ export default {
         oauthExpired: 'The authorization link has expired, please start over',
         oauthNotFound: 'Authorization state not found, please start over',
         oauthTimeout: 'Authorization timed out, please re-try after finishing the new window',
+        oauthLocalOnly: 'TraeWork one-click authorization only works when the console is accessed via 127.0.0.1 (the auth page only calls back to loopback). For remote deployments, access via SSH port forwarding, or add the account by pasting auth JSON',
         accessToken: 'Access Token',
         refreshToken: 'Refresh Token',
         machineId: 'Machine ID',

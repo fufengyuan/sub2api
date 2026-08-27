@@ -35,8 +35,11 @@ func (f *fakeCnAccountCreator) CreateAccount(_ context.Context, input *CreateAcc
 // fakeCnTraeWorkLoginClient 冒充 traework 登录窄接口的测试替身。
 type fakeCnTraeWorkLoginClient struct {
 	refreshErr    error
+	exchangeErr   error
 	userInfoErr   error
 	gotAuth       *auth.Auth
+	gotAuthCode   string
+	gotVerifier   string
 	uid           string
 	nickname      string
 	enterpriseID  string
@@ -57,6 +60,21 @@ func (f *fakeCnTraeWorkLoginClient) RefreshToken(a *auth.Auth) error {
 		a.ExpiresAt = f.rotatedExpiry
 	}
 	return nil
+}
+
+func (f *fakeCnTraeWorkLoginClient) ExchangeAuthCode(a *auth.Auth, authCode, codeVerifier string) (*traework.AuthCodeResult, error) {
+	f.gotAuth = a
+	f.gotAuthCode = authCode
+	f.gotVerifier = codeVerifier
+	if f.exchangeErr != nil {
+		return nil, f.exchangeErr
+	}
+	return &traework.AuthCodeResult{
+		AccessToken:  "at-code",
+		RefreshToken: "rt-code",
+		ExpiresAt:    654321,
+		Host:         "https://api.trae.cn",
+	}, nil
 }
 
 func (f *fakeCnTraeWorkLoginClient) GetUserInfo(a *auth.Auth) (uid, nickname, enterpriseID string, err error) {
@@ -129,15 +147,61 @@ func TestCnOAuthStart_TraeWorkBuildsAuthorizationURL(t *testing.T) {
 	if q.Get("auth_from") != "solo" {
 		t.Fatalf("auth_from = %q, want solo", q.Get("auth_from"))
 	}
-	wantCallback := "http://localhost:3000/oauth/callback/traework/" + state
+	wantCallback := "http://127.0.0.1:3000/authorize"
 	if q.Get("auth_callback_url") != wantCallback {
 		t.Fatalf("auth_callback_url = %q, want %q", q.Get("auth_callback_url"), wantCallback)
 	}
 	if q.Get("machine_id") == "" || q.Get("device_id") == "" {
 		t.Fatal("expected non-empty machine_id/device_id")
 	}
-	if q.Get("code_challenge") != "" || q.Get("response_type") != "" {
-		t.Fatal("traework flow must not use authorization-code/PKCE params")
+	// 对齐原版 login_trae：PKCE + 完整参数表。
+	if q.Get("code_challenge") == "" || q.Get("code_challenge_method") != "S256" {
+		t.Fatalf("PKCE params missing: code_challenge=%q method=%q", q.Get("code_challenge"), q.Get("code_challenge_method"))
+	}
+	if q.Get("hide_saas_login") != "true" || q.Get("channel_name") != "common" || q.Get("click_id") == "" {
+		t.Fatalf("missing original params: hide_saas_login=%q channel_name=%q click_id=%q",
+			q.Get("hide_saas_login"), q.Get("channel_name"), q.Get("click_id"))
+	}
+	if q.Get("x_device_type") != "windows" {
+		t.Fatalf("x_device_type = %q, want windows", q.Get("x_device_type"))
+	}
+	// 设备指纹格式对齐真实客户端：machine_id 64 位 hex，device_id 15 位纯数字。
+	if len(q.Get("machine_id")) != 64 {
+		t.Fatalf("machine_id len = %d, want 64", len(q.Get("machine_id")))
+	}
+	if len(q.Get("device_id")) != 15 {
+		t.Fatalf("device_id len = %d, want 15 digits", len(q.Get("device_id")))
+	}
+}
+
+func TestCnOAuthStart_TraeWorkRedirectPort(t *testing.T) {
+	svc, _ := newTestCnOAuthSvc(&fakeCnTraeWorkLoginClient{}, &fakeCnWorkBuddyLoginClient{})
+	cases := []struct {
+		base string
+		want string
+	}{
+		{"http://localhost:3000", "http://127.0.0.1:3000/authorize"},
+		{"http://127.0.0.1:8080/", "http://127.0.0.1:8080/authorize"},
+		{"https://sub2api.example.com", "http://127.0.0.1:443/authorize"},
+		{"http://sub2api.example.com", "http://127.0.0.1:80/authorize"},
+	}
+	for _, c := range cases {
+		authorizeURL, _, err := svc.Start(context.Background(), "traework", c.base)
+		if err != nil {
+			t.Fatalf("Start(%q) returned error: %v", c.base, err)
+		}
+		parsed, err := url.Parse(authorizeURL)
+		if err != nil {
+			t.Fatalf("authorizeURL is not a valid URL: %v", err)
+		}
+		// parsed.Query().Get 已做 URL 解码。
+		if got := parsed.Query().Get("auth_callback_url"); got != c.want {
+			t.Fatalf("Start(%q) callback = %q, want %q", c.base, got, c.want)
+		}
+	}
+	// 非法 redirect_base 必须报错。
+	if _, _, err := svc.Start(context.Background(), "traework", "not-a-url"); err == nil {
+		t.Fatal("Start with invalid redirect_base should fail")
 	}
 }
 
@@ -189,7 +253,7 @@ func TestCnOAuthStatus_NotFound(t *testing.T) {
 
 func TestCnOAuthExchangeAndCreate_FakeStateFails(t *testing.T) {
 	svc, _ := newTestCnOAuthSvc(&fakeCnTraeWorkLoginClient{}, &fakeCnWorkBuddyLoginClient{})
-	if _, err := svc.ExchangeAndCreate(context.Background(), "totally-fake-state", "rt", ""); !errors.Is(err, ErrCnOAuthStateNotFound) {
+	if _, err := svc.ExchangeAndCreate(context.Background(), "totally-fake-state", traework.CallbackInfo{RefreshToken: "rt"}, ""); !errors.Is(err, ErrCnOAuthStateNotFound) {
 		t.Fatalf("expected ErrCnOAuthStateNotFound, got %v", err)
 	}
 }
@@ -202,7 +266,7 @@ func TestCnOAuthExchangeAndCreate_ExpiredStateFails(t *testing.T) {
 		DeviceID:  "d",
 		ExpiresAt: time.Now().Add(-time.Minute),
 	})
-	if _, err := svc.ExchangeAndCreate(context.Background(), "exp-state", "rt", ""); !errors.Is(err, ErrCnOAuthStateExpired) {
+	if _, err := svc.ExchangeAndCreate(context.Background(), "exp-state", traework.CallbackInfo{RefreshToken: "rt"}, ""); !errors.Is(err, ErrCnOAuthStateExpired) {
 		t.Fatalf("expected ErrCnOAuthStateExpired, got %v", err)
 	}
 }
@@ -214,7 +278,7 @@ func TestCnOAuthExchangeAndCreate_WorkBuddyStateRejected(t *testing.T) {
 		UpstreamState: "up",
 		ExpiresAt:     time.Now().Add(time.Minute),
 	})
-	if _, err := svc.ExchangeAndCreate(context.Background(), "wb-state", "rt", ""); err == nil {
+	if _, err := svc.ExchangeAndCreate(context.Background(), "wb-state", traework.CallbackInfo{RefreshToken: "rt"}, ""); err == nil {
 		t.Fatal("workbuddy state must not go through callback exchange")
 	}
 }
@@ -228,7 +292,7 @@ func TestCnOAuthExchangeAndCreate_SuccessAndReplayRejected(t *testing.T) {
 		t.Fatalf("Start returned error: %v", err)
 	}
 
-	account, err := svc.ExchangeAndCreate(ctx, state, "refresh-token-1", "https://api.trae.cn")
+	account, err := svc.ExchangeAndCreate(ctx, state, traework.CallbackInfo{RefreshToken: "refresh-token-1"}, "https://api.trae.cn")
 	if err != nil {
 		t.Fatalf("ExchangeAndCreate returned error: %v", err)
 	}
@@ -278,7 +342,7 @@ func TestCnOAuthExchangeAndCreate_SuccessAndReplayRejected(t *testing.T) {
 	}
 
 	// 二次使用（重放）被拒绝。
-	if _, err := svc.ExchangeAndCreate(ctx, state, "refresh-token-1", ""); !errors.Is(err, ErrCnOAuthStateUsed) {
+	if _, err := svc.ExchangeAndCreate(ctx, state, traework.CallbackInfo{RefreshToken: "refresh-token-1"}, ""); !errors.Is(err, ErrCnOAuthStateUsed) {
 		t.Fatalf("expected ErrCnOAuthStateUsed on replay, got %v", err)
 	}
 }
@@ -288,11 +352,120 @@ func TestCnOAuthExchangeAndCreate_HostFallback(t *testing.T) {
 	svc, _ := newTestCnOAuthSvc(trae, &fakeCnWorkBuddyLoginClient{})
 	ctx := context.Background()
 	_, state, _ := svc.Start(ctx, "traework", "http://localhost:3000")
-	if _, err := svc.ExchangeAndCreate(ctx, state, "rt", ""); err != nil {
+	if _, err := svc.ExchangeAndCreate(ctx, state, traework.CallbackInfo{RefreshToken: "rt"}, ""); err != nil {
 		t.Fatalf("ExchangeAndCreate returned error: %v", err)
 	}
 	if trae.gotAuth.ApiHost != traework.OAuthHost {
 		t.Fatalf("apiHost = %q, want fallback %q", trae.gotAuth.ApiHost, traework.OAuthHost)
+	}
+}
+
+func TestCnOAuthExchangeLatestTraeWork_Success(t *testing.T) {
+	trae := &fakeCnTraeWorkLoginClient{uid: "u-2", nickname: "王五"}
+	svc, creator := newTestCnOAuthSvc(trae, &fakeCnWorkBuddyLoginClient{})
+	ctx := context.Background()
+	_, state, err := svc.Start(ctx, "traework", "http://127.0.0.1:8080")
+	if err != nil {
+		t.Fatalf("Start returned error: %v", err)
+	}
+
+	// 授权页回调不带 state，用最近 pending 的 traework state 建号。
+	account, err := svc.ExchangeLatestTraeWork(ctx, traework.CallbackInfo{RefreshToken: "rt-latest"}, "https://api.trae.cn")
+	if err != nil {
+		t.Fatalf("ExchangeLatestTraeWork returned error: %v", err)
+	}
+	if account.Name != "王五" {
+		t.Fatalf("account name = %q, want 王五", account.Name)
+	}
+	if len(creator.created) != 1 {
+		t.Fatalf("expected creator called once, got %d", len(creator.created))
+	}
+	if trae.gotAuth.RefreshToken != "rt-latest" {
+		t.Fatalf("exchanger got refreshToken = %q, want rt-latest", trae.gotAuth.RefreshToken)
+	}
+	if trae.gotAuth.MachineID == "" || trae.gotAuth.DeviceID == "" {
+		t.Fatal("exchanger should receive state-paired machine/device id")
+	}
+	// 原 state 应转为 used。
+	if status, _ := svc.Status(ctx, state); status != oauthStateStatusUsed {
+		t.Fatalf("expected used status, got %q", status)
+	}
+
+	// 无 pending 流程时回调报错。
+	if _, err := svc.ExchangeLatestTraeWork(ctx, traework.CallbackInfo{RefreshToken: "rt-again"}, ""); err == nil {
+		t.Fatal("ExchangeLatestTraeWork should fail when no pending traework state")
+	}
+}
+
+func TestCnOAuthExchangeLatestTraeWork_PicksLatestPending(t *testing.T) {
+	trae := &fakeCnTraeWorkLoginClient{uid: "u-3"}
+	svc, creator := newTestCnOAuthSvc(trae, &fakeCnWorkBuddyLoginClient{})
+	ctx := context.Background()
+	_, state1, _ := svc.Start(ctx, "traework", "http://127.0.0.1:8080")
+	// 手动把第一条的 TTL 调小，模拟更早发起的流。
+	svc.store.Put(state1, oauthStateEntry{
+		Platform:  PlatformTraeWork,
+		MachineID: "old-machine",
+		DeviceID:  "old-device",
+		ExpiresAt: time.Now().Add(cnOAuthStateTTL - time.Minute),
+	})
+	_, state2, _ := svc.Start(ctx, "traework", "http://127.0.0.1:8080")
+
+	if _, err := svc.ExchangeLatestTraeWork(ctx, traework.CallbackInfo{RefreshToken: "rt"}, ""); err != nil {
+		t.Fatalf("ExchangeLatestTraeWork returned error: %v", err)
+	}
+	if len(creator.created) != 1 {
+		t.Fatalf("expected creator called once, got %d", len(creator.created))
+	}
+	// 交换器应拿到最近一条（state2）的设备指纹。
+	if trae.gotAuth.MachineID == "old-machine" {
+		t.Fatal("should pick the latest pending state, not the older one")
+	}
+	// 旧的 state 应仍为 pending（未被消费），新的应已 used。
+	if status, _ := svc.Status(ctx, state1); status != oauthStateStatusPending {
+		t.Fatalf("older state should stay pending, got %q", status)
+	}
+	if status, _ := svc.Status(ctx, state2); status != oauthStateStatusUsed {
+		t.Fatalf("latest state should be used, got %q", status)
+	}
+}
+
+func TestCnOAuthExchangeLatestTraeWork_AuthCodePKCE(t *testing.T) {
+	trae := &fakeCnTraeWorkLoginClient{uid: "u-4", nickname: "赵六"}
+	svc, creator := newTestCnOAuthSvc(trae, &fakeCnWorkBuddyLoginClient{})
+	ctx := context.Background()
+	_, state, err := svc.Start(ctx, "traework", "http://127.0.0.1:8080")
+	if err != nil {
+		t.Fatalf("Start returned error: %v", err)
+	}
+
+	// PKCE 新流程：回调只带 authCodeInfo（AuthCode），用 state 配对的 verifier 交换。
+	account, err := svc.ExchangeLatestTraeWork(ctx, traework.CallbackInfo{AuthCode: "ac-1"}, "https://api.trae.com.cn")
+	if err != nil {
+		t.Fatalf("ExchangeLatestTraeWork returned error: %v", err)
+	}
+	if account.Name != "赵六" {
+		t.Fatalf("account name = %q, want 赵六", account.Name)
+	}
+	if trae.gotAuthCode != "ac-1" {
+		t.Fatalf("exchanger got authCode = %q, want ac-1", trae.gotAuthCode)
+	}
+	if trae.gotVerifier == "" {
+		t.Fatal("exchanger should receive state-paired PKCE code verifier")
+	}
+	creds := creator.created[0].Credentials
+	if creds["accessToken"] != "at-code" || creds["refreshToken"] != "rt-code" {
+		t.Fatalf("accessToken/refreshToken = %v/%v, want at-code/rt-code", creds["accessToken"], creds["refreshToken"])
+	}
+	if getInt64(creds["expiresAt"]) != 654321 {
+		t.Fatalf("expiresAt = %v, want 654321", creds["expiresAt"])
+	}
+	// 交换成功 origin 覆盖回调 host。
+	if creds["apiHost"] != "https://api.trae.cn" {
+		t.Fatalf("apiHost = %v, want exchange origin https://api.trae.cn", creds["apiHost"])
+	}
+	if status, _ := svc.Status(ctx, state); status != oauthStateStatusUsed {
+		t.Fatalf("expected used status, got %q", status)
 	}
 }
 

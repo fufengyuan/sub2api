@@ -689,6 +689,17 @@ func TestEmbeddedFrontendBypassesBareVideoAPIRoutes(t *testing.T) {
 	}
 }
 
+func TestEmbeddedFrontendBypassesCnOAuthCallbackRoutes(t *testing.T) {
+	for _, path := range []string{
+		"/authorize",
+		"/oauth/callback/traework/abc",
+	} {
+		require.True(t, shouldBypassEmbeddedFrontend(path), "path=%s", path)
+	}
+	// 非 /authorize 前缀的路径仍应交给 SPA。
+	require.False(t, shouldBypassEmbeddedFrontend("/authorized-page"))
+}
+
 func TestNewFrontendServer(t *testing.T) {
 	t.Run("creates_server_successfully", func(t *testing.T) {
 		provider := &mockSettingsProvider{

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"net/url"
 	"strings"
 	"sync"
 	"time"
@@ -40,6 +41,7 @@ type AdminAccountCreator interface {
 type cnTraeWorkLoginClient interface {
 	RefreshToken(a *auth.Auth) error
 	GetUserInfo(a *auth.Auth) (uid, nickname, enterpriseID string, err error)
+	ExchangeAuthCode(a *auth.Auth, authCode, codeVerifier string) (*traework.AuthCodeResult, error)
 }
 
 // cnWorkBuddyLoginClient 与 upstream.Client 登录方法签名一致的窄接口（测试可注入 stub）。
@@ -57,14 +59,18 @@ type oauthStateStore interface {
 	// Consume 一次性占用读取（建号路径用）：
 	// 仅当存在、未过期、未使用才标记为已用并返回 true；否则返回 false（同时 lazily 清理过期条目）。
 	Consume(state string) (oauthStateEntry, bool)
+	// LatestPending 返回指定平台最近一条未过期未使用的 state（traework 回调关联用）。
+	LatestPending(platform string) (string, oauthStateEntry, bool)
 }
 
 // oauthStateEntry 一次 OAuth 授权流中的 state 上下文。
 type oauthStateEntry struct {
 	Platform string
-	// MachineID/DeviceID 仅 traework：授权 URL 配对的设备指纹，回调建号时回填。
-	MachineID string
-	DeviceID  string
+	// MachineID/DeviceID/CodeVerifier 仅 traework：授权 URL 配对的设备指纹与
+	// PKCE verifier（交换 AuthCode 时必须与登录 URL 配对），回调建号时回填。
+	MachineID    string
+	DeviceID     string
+	CodeVerifier string
 	// UpstreamState 仅 workbuddy：上游 auth/state 签发的登录 state。
 	UpstreamState string
 	ExpiresAt     time.Time
@@ -107,8 +113,15 @@ func NewCnOAuthService(creator AdminAccountCreator, trae cnTraeWorkLoginClient, 
 
 // Start 校验平台并构造一次 OAuth 授权流，返回可跳转的授权 URL 与本地 state。
 //
-//   - traework：生成一次性 state + 设备指纹，构造 www.trae.cn/authorization 授权 URL
-//     （auth_callback_url 含路径级 state，回调见 ExchangeAndCreate）。
+//   - traework：生成一次性 state + 设备指纹 + PKCE code_verifier/challenge，
+//     构造 www.trae.cn/authorization 授权 URL（参数表对齐原 workbuddy-wild
+//     login_trae，含 code_challenge/hide_saas_login/channel_name/click_id 等）。
+//     授权页对 auth_callback_url 做正则硬校验 ^http://127\.0\.0\.1:(\d+)/authorize$
+//     （本机 IDE 协议，域名/localhost/带 query 一律拒绝），因此 callback 固定为
+//     http://127.0.0.1:{port}/authorize（port 取自访问地址），state 无法随 callback
+//     传递，回调侧用「最近一条 pending 的 traework state」关联（见 Authorize 回调
+//     与 ExchangeLatestTraeWork）。仅当浏览器与 sub2api 同机（本机部署或 SSH 端口
+//     转发）时可完成回调，远程域名访问请改用粘贴 auth JSON 建号。
 //   - workbuddy：调上游 StartLogin 拿授权 URL，暂存「本地 state ↔ 上游 state」映射
 //     （轮询建号见 Status）。
 func (s *CnOAuthService) Start(ctx context.Context, platform, redirectBase string) (authorizeURL, state string, err error) {
@@ -129,15 +142,23 @@ func (s *CnOAuthService) Start(ctx context.Context, platform, redirectBase strin
 		if strings.TrimSpace(redirectBase) == "" {
 			return "", "", infraerrors.Newf(http.StatusBadRequest, "CN_OAUTH_INVALID_REDIRECT", "redirect_base required")
 		}
-		machineID, deviceID := randomHex(16), randomHex(16)
-		callbackURL := strings.TrimRight(redirectBase, "/") + "/oauth/callback/traework/" + state
+		port, err := redirectPort(redirectBase)
+		if err != nil {
+			return "", "", infraerrors.Newf(http.StatusBadRequest, "CN_OAUTH_INVALID_REDIRECT", "invalid redirect_base: %v", err)
+		}
+		machineID, deviceID := traework.GenMachineID(), traework.GenDeviceID()
+		codeVerifier, codeChallenge := traework.GenPKCE()
+		// 授权页硬校验 callback 形如 http://127.0.0.1:{port}/authorize（不得带 query/路径），
+		// state 无法放入 callback，回调侧用最近一条 pending 的 traework state 关联。
+		callbackURL := "http://127.0.0.1:" + port + "/authorize"
 		s.store.Put(state, oauthStateEntry{
-			Platform:  platform,
-			MachineID: machineID,
-			DeviceID:  deviceID,
-			ExpiresAt: time.Now().Add(cnOAuthStateTTL),
+			Platform:     platform,
+			MachineID:    machineID,
+			DeviceID:     deviceID,
+			CodeVerifier: codeVerifier,
+			ExpiresAt:    time.Now().Add(cnOAuthStateTTL),
 		})
-		return traework.BuildAuthorizeURL(callbackURL, machineID, deviceID), state, nil
+		return traework.BuildAuthorizeURL(callbackURL, machineID, deviceID, codeChallenge), state, nil
 	default: // workbuddy
 		upstreamState, authURL, err := s.workbuddy.StartLogin()
 		if err != nil {
@@ -153,13 +174,12 @@ func (s *CnOAuthService) Start(ctx context.Context, platform, redirectBase strin
 	}
 }
 
-// ExchangeAndCreate traework 回调：校验并消费 state（防重放），用回调携带的
-// refreshToken 换 accessToken（RefreshToken），再取用户信息建 type=oauth 账号。
-func (s *CnOAuthService) ExchangeAndCreate(ctx context.Context, state, refreshToken, host string) (*Account, error) {
+// ExchangeAndCreate traework 显式 state 回调交换（保留给可携带 state 的调用方，
+// 真实授权页因 callback 硬校验不带 state，实际走 ExchangeLatestTraeWork）。
+func (s *CnOAuthService) ExchangeAndCreate(ctx context.Context, state string, info traework.CallbackInfo, host string) (*Account, error) {
 	state = strings.TrimSpace(state)
-	refreshToken = strings.TrimSpace(refreshToken)
-	if state == "" || refreshToken == "" {
-		return nil, infraerrors.BadRequest("CN_OAUTH_MISSING_PARAMS", "state and refreshToken are required")
+	if state == "" || !info.HasCredential() {
+		return nil, infraerrors.BadRequest("CN_OAUTH_MISSING_PARAMS", "state and credential (refreshToken/authCode) are required")
 	}
 
 	entry, ok := s.store.Get(state)
@@ -182,21 +202,73 @@ func (s *CnOAuthService) ExchangeAndCreate(ctx context.Context, state, refreshTo
 	if !ok {
 		return nil, ErrCnOAuthStateUsed
 	}
+	return s.exchangeTraeWorkAndCreate(ctx, consumed, info, host)
+}
 
+// ExchangeLatestTraeWork traework 授权页真实回调（GET/POST /authorize）：
+// 授权页硬校验 callback 不得携带 state，故用「最近一条 pending 的 traework state」
+// 关联本次授权流（与原 workbuddy-wild 的单会话一次性监听语义一致）。
+// 回调凭证解析优先级对齐原版 ParseCallback：refreshToken > userJwt.RefreshToken >
+// userJwt.Token（accessToken 兜底）> authCodeInfo.AuthCode（PKCE 新流程）。
+func (s *CnOAuthService) ExchangeLatestTraeWork(ctx context.Context, info traework.CallbackInfo, host string) (*Account, error) {
+	if !info.HasCredential() {
+		return nil, infraerrors.BadRequest("CN_OAUTH_MISSING_PARAMS", "refreshToken or authCode is required")
+	}
+	state, _, ok := s.store.LatestPending(PlatformTraeWork)
+	if !ok {
+		return nil, infraerrors.Newf(http.StatusBadRequest, "CN_OAUTH_STATE_NOT_FOUND",
+			"没有进行中的 traework 授权流程（state 已过期或未发起）")
+	}
+	consumed, ok := s.store.Consume(state)
+	if !ok {
+		return nil, ErrCnOAuthStateUsed
+	}
+	return s.exchangeTraeWorkAndCreate(ctx, consumed, info, host)
+}
+
+// exchangeTraeWorkAndCreate 用回调凭证换 accessToken，再取用户信息建 type=oauth 账号。
+// 三条凭证路径（对齐原 workbuddy-wild login_trae.Poll）：
+//  1. AuthCode（PKCE 新流程）：AuthCode + code_verifier + 设备公钥交换 token；
+//  2. RefreshToken（标准路径）：RefreshToken 换 access token；
+//  3. AccessToken（兜底）：回调只给了 userJwt.Token，本轮可用（后续 refresh 会失败）。
+func (s *CnOAuthService) exchangeTraeWorkAndCreate(ctx context.Context, consumed oauthStateEntry, info traework.CallbackInfo, host string) (*Account, error) {
 	if host == "" {
 		host = traework.OAuthHost
 	}
 	a := &auth.Auth{
 		Kind:         "traework",
-		RefreshToken: refreshToken,
+		RefreshToken: strings.TrimSpace(info.RefreshToken),
+		AccessToken:  strings.TrimSpace(info.AccessToken),
 		ApiHost:      host,
 		MachineID:    consumed.MachineID,
 		DeviceID:     consumed.DeviceID,
 		Domain:       "trae.cn",
 	}
-	if err := s.traework.RefreshToken(a); err != nil {
-		return nil, infraerrors.Newf(http.StatusBadGateway, "CN_OAUTH_EXCHANGE_FAILED",
-			"traework refresh token failed: %v", err)
+	switch {
+	case info.AuthCode != "":
+		// PKCE 新流程：AuthCode + codeVerifier + 设备公钥交换
+		res, err := s.traework.ExchangeAuthCode(a, info.AuthCode, consumed.CodeVerifier)
+		if err != nil {
+			return nil, infraerrors.Newf(http.StatusBadGateway, "CN_OAUTH_EXCHANGE_FAILED",
+				"traework exchange auth code failed: %v", err)
+		}
+		a.AccessToken = res.AccessToken
+		a.RefreshToken = res.RefreshToken
+		a.ExpiresAt = res.ExpiresAt
+		if res.Host != "" {
+			a.ApiHost = res.Host
+		}
+	case a.RefreshToken != "":
+		// 标准路径：ExchangeToken 换 access token
+		if err := s.traework.RefreshToken(a); err != nil {
+			return nil, infraerrors.Newf(http.StatusBadGateway, "CN_OAUTH_EXCHANGE_FAILED",
+				"traework refresh token failed: %v", err)
+		}
+	default:
+		// 兜底路径：回调只给了 userJwt.Token，无 refreshToken（后续 refresh 会失败，但本轮可用）
+		if a.AccessToken == "" {
+			return nil, infraerrors.BadRequest("CN_OAUTH_MISSING_PARAMS", "no token in callback")
+		}
 	}
 	uid, nickname, enterpriseID, err := s.traework.GetUserInfo(a)
 	if err != nil {
@@ -238,6 +310,24 @@ func (s *CnOAuthService) ExchangeAndCreate(ctx context.Context, state, refreshTo
 			"create oauth account failed: %v", err)
 	}
 	return account, nil
+}
+
+// redirectPort 从访问地址（redirect_base）提取端口：显式端口优先，否则按 scheme
+// 取默认端口（http=80 / https=443），用于构造 127.0.0.1 回环 callback。
+func redirectPort(redirectBase string) (string, error) {
+	u, err := url.Parse(strings.TrimSpace(redirectBase))
+	if err != nil || u.Scheme == "" || u.Host == "" {
+		return "", fmt.Errorf("redirect_base must be an absolute URL, got %q", redirectBase)
+	}
+	if p := u.Port(); p != "" {
+		return p, nil
+	}
+	switch u.Scheme {
+	case "https":
+		return "443", nil
+	default:
+		return "80", nil
+	}
 }
 
 // Status 返回一次授权流 state 的当前状态。
@@ -356,6 +446,27 @@ func (s *inMemoryOAuthStateStore) Consume(state string) (oauthStateEntry, bool) 
 	entry.Used = true
 	s.items[state] = entry
 	return entry, true
+}
+
+// LatestPending 返回指定平台最近一条未过期未使用的 state。
+// ExpiresAt = 写入时间 + TTL，故 ExpiresAt 最大者即最近写入。
+func (s *inMemoryOAuthStateStore) LatestPending(platform string) (string, oauthStateEntry, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.pruneLocked()
+	now := time.Now()
+	var bestState string
+	var best oauthStateEntry
+	found := false
+	for k, v := range s.items {
+		if v.Platform != platform || v.Used || now.After(v.ExpiresAt) {
+			continue
+		}
+		if !found || v.ExpiresAt.After(best.ExpiresAt) {
+			bestState, best, found = k, v, true
+		}
+	}
+	return bestState, best, found
 }
 
 // pruneLocked 回收「已超过保留窗口」的条目（过期/已用均会在 TTL+Retention 后被清理）。

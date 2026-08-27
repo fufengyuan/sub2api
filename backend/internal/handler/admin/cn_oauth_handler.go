@@ -1,8 +1,12 @@
 package admin
 
 import (
+	"encoding/json"
 	"fmt"
+	"io"
+	"net/url"
 
+	"github.com/Wei-Shaw/sub2api/internal/cnupstream/traework"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/response"
 	"github.com/Wei-Shaw/sub2api/internal/service"
 	"github.com/gin-gonic/gin"
@@ -12,7 +16,8 @@ import (
 //
 //	POST /admin/cn-oauth/start   发起授权（返回 authorize_url + state）
 //	GET  /admin/cn-oauth/status  查询 state 状态
-//	GET  /oauth/callback/:platform 公开回调（用户授权后跳回）
+//	GET  /authorize              traework 授权页真实回调（127.0.0.1 本机协议）
+//	GET  /oauth/callback/:platform/:state 显式 state 回调（保留的兼容路径）
 type CnOAuthHandler struct {
 	svc *service.CnOAuthService
 }
@@ -64,8 +69,32 @@ func (h *CnOAuthHandler) Status(c *gin.Context) {
 	})
 }
 
-// Callback 公开回调（仅 traework）：授权页回跳携带路径级 state 与
-// refreshToken/host 查询参数；workbuddy 走服务端轮询无回调，qoder 不支持。
+// Authorize traework 授权页真实回调（GET/POST /authorize）。
+// 授权页硬校验 callback 必须形如 http://127.0.0.1:{port}/authorize（不得带 state），
+// 后端用最近一条 pending 的 traework state 关联本次授权流并建号。
+// 凭证解析对齐原 workbuddy-wild：GET 走 query，POST（新版授权页 redirect=1）
+// 走 JSON body 合并进 query 后统一解析（refreshToken > userJwt > authCodeInfo）。
+func (h *CnOAuthHandler) Authorize(c *gin.Context) {
+	if h == nil || h.svc == nil {
+		writeCallbackResult(c, false, "cn oauth service is not enabled")
+		return
+	}
+	q, host := callbackParams(c)
+	info := traework.ParseCallbackValues(q)
+	account, err := h.svc.ExchangeLatestTraeWork(c.Request.Context(), info, host)
+	if err != nil {
+		writeCallbackResult(c, false, err.Error())
+		return
+	}
+	name := account.Name
+	if name == "" {
+		name = account.Platform
+	}
+	writeCallbackResult(c, true, fmt.Sprintf("账号授权成功：%s（platform=traework）", name))
+}
+
+// Callback 显式 state 公开回调（仅 traework）：授权页回跳携带路径级 state 与
+// 凭证查询参数；workbuddy 走服务端轮询无回调，qoder 不支持。
 func (h *CnOAuthHandler) Callback(c *gin.Context) {
 	platform := c.Param("platform")
 	state := c.Param("state")
@@ -77,9 +106,9 @@ func (h *CnOAuthHandler) Callback(c *gin.Context) {
 		writeCallbackResult(c, false, fmt.Sprintf("平台 %s 无需回调（workbuddy 由服务端轮询建号，qoder 请粘贴 auth JSON）", platform))
 		return
 	}
-	refreshToken := c.Query("refreshToken")
-	host := c.Query("host")
-	account, err := h.svc.ExchangeAndCreate(c.Request.Context(), state, refreshToken, host)
+	q, host := callbackParams(c)
+	info := traework.ParseCallbackValues(q)
+	account, err := h.svc.ExchangeAndCreate(c.Request.Context(), state, info, host)
 	if err != nil {
 		writeCallbackResult(c, false, err.Error())
 		return
@@ -89,6 +118,25 @@ func (h *CnOAuthHandler) Callback(c *gin.Context) {
 		name = account.Platform
 	}
 	writeCallbackResult(c, true, fmt.Sprintf("账号授权成功：%s（platform=%s）", name, platform))
+}
+
+// callbackParams 汇总回调请求的全部参数（query + POST JSON body 字段合并，
+// query 已有的键不被覆盖），并提取 host。对齐原版 login_trae 的 GET/POST 双协议。
+func callbackParams(c *gin.Context) (q url.Values, host string) {
+	q = c.Request.URL.Query()
+	if c.Request.Method == "POST" && c.Request.Body != nil {
+		if body, _ := io.ReadAll(io.LimitReader(c.Request.Body, 64<<10)); len(body) > 0 {
+			var m map[string]any
+			if json.Unmarshal(body, &m) == nil {
+				for k, v := range m {
+					if s, ok := v.(string); ok && q.Get(k) == "" {
+						q.Set(k, s)
+					}
+				}
+			}
+		}
+	}
+	return q, q.Get("host")
 }
 
 // writeCallbackResult 以简单可读 HTML 文本回写回调结果（浏览器直接可见）。

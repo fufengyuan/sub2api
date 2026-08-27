@@ -4279,6 +4279,12 @@ const handleDomesticOAuthCreate = async () => {
 // 一键授权：调 /admin/cn-oauth/start 打开授权页并轮询状态（used 视为成功即刷新）
 const handleDomesticOneClickAuth = async () => {
   if (domesticOAuthAuthorizing.value) return
+  // TraeWork 授权页硬校验 callback 为 http://127.0.0.1:{port}/authorize（本机 IDE 协议），
+  // 非本机访问时回调到不了 sub2api，提前给出明确提示。
+  if (form.platform === 'traework' && !['127.0.0.1', 'localhost'].includes(window.location.hostname)) {
+    appStore.showError(t('admin.accounts.domesticTool.oauthLocalOnly'))
+    return
+  }
   domesticOAuthAuthorizing.value = true
   try {
     const res = await adminAPI.accounts.startCnOAuth(form.platform, window.location.origin)

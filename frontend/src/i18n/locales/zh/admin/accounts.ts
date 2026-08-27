@@ -1041,6 +1041,7 @@ export default {
         oauthExpired: '授权链接已过期，请重新发起',
         oauthNotFound: '授权状态不存在，请重新发起',
         oauthTimeout: '授权等待超时，请确认新窗口完成后重试',
+        oauthLocalOnly: 'TraeWork 一键授权仅支持通过 127.0.0.1 本机访问（授权页只回调本机回环地址）。远程部署请通过 SSH 端口转发访问后台，或改用「粘贴 auth JSON」方式添加',
         accessToken: 'Access Token',
         refreshToken: 'Refresh Token',
         machineId: 'Machine ID',
