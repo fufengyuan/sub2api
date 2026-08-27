@@ -26,6 +26,10 @@ import (
 	"sync"
 	"time"
 
+	cnclient "github.com/Wei-Shaw/sub2api/internal/cnupstream/upstream"
+	traework "github.com/Wei-Shaw/sub2api/internal/cnupstream/traework"
+	qoder "github.com/Wei-Shaw/sub2api/internal/cnupstream/qoder"
+	provider "github.com/Wei-Shaw/sub2api/internal/cnupstream/provider"
 	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/claude"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/geminicli"
@@ -294,6 +298,12 @@ func (s *AccountTestService) TestAccountConnection(c *gin.Context, accountID int
 		}
 	}
 
+	// 三渠道（workbuddy/traework/qoder）oauth 账号走 cnupstream 直连测试，
+	// 不得落入 Claude/OpenAI 通用分支（凭证键名与上游协议均不同）。
+	if isCnUpstreamPlatform(account.Platform) {
+		return s.testCnUpstreamAccountConnection(c, account, modelID, prompt)
+	}
+
 	if account.IsOpenAI() {
 		return s.testOpenAIAccountConnection(c, account, modelID, prompt, normalizeAccountTestMode(mode))
 	}
@@ -332,6 +342,85 @@ func (s *AccountTestService) testCNProviderChatCompletionsConnection(c *gin.Cont
 	}
 
 	return s.testOpenAIChatCompletionsConnection(c, account, testModelID, prompt, normalizedBaseURL, authToken)
+}
+
+// cnTestUpstreamBuilders 三渠道（workbuddy/traework/qoder）测试连接的上游
+// client 构建器：client 无状态、按需构建（与 CnUpstreamService 同构），单测可临时替换注入 fake。
+var cnTestUpstreamBuilders = map[string]func() provider.Upstream{
+	PlatformWorkBuddy: func() provider.Upstream { return cnclient.New() },
+	PlatformTraeWork:  func() provider.Upstream { return traework.New() },
+	PlatformQoder:     func() provider.Upstream { return qoder.New() },
+}
+
+// testCnUpstreamAccountConnection 三渠道账号直连测试：对外模型经 GetMappedModel
+// 转为上游真实模型后调 upstream.ChatStream，私有 SSE 聚合为 OpenAI 对象取首条回复。
+func (s *AccountTestService) testCnUpstreamAccountConnection(c *gin.Context, account *Account, modelID string, prompt string) error {
+	builder, ok := cnTestUpstreamBuilders[account.Platform]
+	if !ok {
+		return s.sendErrorAndEnd(c, fmt.Sprintf("unsupported cn upstream platform %s", account.Platform))
+	}
+	testModelID := strings.TrimSpace(modelID)
+	if testModelID == "" {
+		return s.sendErrorAndEnd(c, "Please select a test model")
+	}
+	upstreamModel := account.GetMappedModel(testModelID)
+	if upstreamModel == "" {
+		upstreamModel = testModelID
+	}
+	if strings.TrimSpace(prompt) == "" {
+		prompt = "Hi"
+	}
+	body, err := json.Marshal(map[string]any{
+		"model":    upstreamModel,
+		"messages": []map[string]string{{"role": "user", "content": prompt}},
+		"stream":   true,
+	})
+	if err != nil {
+		return s.sendErrorAndEnd(c, fmt.Sprintf("build request body failed: %v", err))
+	}
+
+	s.sendEvent(c, TestEvent{Type: "test_start", Model: testModelID})
+
+	a := hydrateAuth(account, account.Platform)
+	up := builder()
+	rc, status, respBody, err := up.ChatStream(a, body)
+	if rc != nil {
+		defer func() { _ = rc.Close() }()
+	}
+	if err != nil {
+		msg := strings.TrimSpace(err.Error())
+		if len(msg) > 512 {
+			msg = msg[:512]
+		}
+		return s.sendErrorAndEnd(c, msg)
+	}
+	if status >= 400 {
+		msg := strings.TrimSpace(string(respBody))
+		if msg == "" {
+			msg = fmt.Sprintf("http %d", status)
+		} else if len(msg) > 512 {
+			msg = msg[:512]
+		}
+		return s.sendErrorAndEnd(c, fmt.Sprintf("%s upstream error (http %d): %s", account.Platform, status, msg))
+	}
+
+	agg, err := up.Aggregate(rc)
+	if err != nil {
+		return s.sendErrorAndEnd(c, fmt.Sprintf("%s aggregate stream failed: %v", account.Platform, err))
+	}
+	content := ""
+	if raw, merr := json.Marshal(agg); merr == nil {
+		content = gjson.GetBytes(raw, "choices.0.message.content").String()
+		if content == "" {
+			content = gjson.GetBytes(raw, "choices.0.delta.content").String()
+		}
+	}
+	if content == "" {
+		return s.sendErrorAndEnd(c, fmt.Sprintf("%s upstream returned no content", account.Platform))
+	}
+	s.sendEvent(c, TestEvent{Type: "content", Text: content})
+	s.sendEvent(c, TestEvent{Type: "test_complete", Success: true})
+	return nil
 }
 
 // testClaudeAccountConnection tests an Anthropic Claude account's connection
