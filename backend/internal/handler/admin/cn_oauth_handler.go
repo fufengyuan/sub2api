@@ -64,16 +64,22 @@ func (h *CnOAuthHandler) Status(c *gin.Context) {
 	})
 }
 
-// Callback 公开回调：用户授权后跳回，携带 code+state。
+// Callback 公开回调（仅 traework）：授权页回跳携带路径级 state 与
+// refreshToken/host 查询参数；workbuddy 走服务端轮询无回调，qoder 不支持。
 func (h *CnOAuthHandler) Callback(c *gin.Context) {
 	platform := c.Param("platform")
-	state := c.Query("state")
-	code := c.Query("code")
+	state := c.Param("state")
 	if h == nil || h.svc == nil {
 		writeCallbackResult(c, false, "cn oauth service is not enabled")
 		return
 	}
-	account, err := h.svc.ExchangeAndCreate(c.Request.Context(), state, code)
+	if platform != "traework" {
+		writeCallbackResult(c, false, fmt.Sprintf("平台 %s 无需回调（workbuddy 由服务端轮询建号，qoder 请粘贴 auth JSON）", platform))
+		return
+	}
+	refreshToken := c.Query("refreshToken")
+	host := c.Query("host")
+	account, err := h.svc.ExchangeAndCreate(c.Request.Context(), state, refreshToken, host)
 	if err != nil {
 		writeCallbackResult(c, false, err.Error())
 		return

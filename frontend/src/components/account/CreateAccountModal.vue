@@ -306,7 +306,10 @@
 
         <!-- 国内工具 OAuth 凭证表单 -->
         <div v-if="accountCategory === 'oauth-based'" class="mt-4 space-y-4">
+          <!-- 一键授权仅 traework（浏览器回调流）/ workbuddy（服务端轮询流）支持；
+               qoder 原项目无登录实现，仅粘贴 auth JSON。 -->
           <button
+            v-if="form.platform === 'traework' || form.platform === 'workbuddy'"
             type="button"
             :disabled="domesticOAuthAuthorizing"
             class="inline-flex w-full items-center justify-center gap-2 rounded-lg bg-emerald-600 px-4 py-2.5 text-sm font-medium text-white transition-all hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-60"

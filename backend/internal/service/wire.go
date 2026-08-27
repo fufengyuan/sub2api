@@ -8,6 +8,7 @@ import (
 
 	dbent "github.com/Wei-Shaw/sub2api/ent"
 	"github.com/Wei-Shaw/sub2api/internal/cnupstream/traework"
+	"github.com/Wei-Shaw/sub2api/internal/cnupstream/upstream"
 	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/Wei-Shaw/sub2api/internal/payment"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/antigravity"
@@ -27,11 +28,11 @@ func ProvideGrokOAuthService(proxyRepo ProxyRepository, oauthClient GrokOAuthCli
 	return svc
 }
 
-// ProvideCnOAuthService 构造三渠道一键 OAuth 授权建号服务（仅 traework 支持）。
-// 建号器取自 AdminService（CreateAccount），token 交换器取 traework 客户端，
-// state 存储使用本地内存实现。
+// ProvideCnOAuthService 构造三渠道一键 OAuth 授权建号服务（traework 回调流 +
+// workbuddy 服务端轮询流，qoder 仅粘贴凭证）。建号器取自 AdminService（CreateAccount），
+// 平台客户端取 traework / upstream 包，state 存储使用本地内存实现。
 func ProvideCnOAuthService(creator AdminAccountCreator) *CnOAuthService {
-	return NewCnOAuthService(creator, traework.New(), NewInMemoryOAuthStateStore())
+	return NewCnOAuthService(creator, traework.New(), upstream.New(), NewInMemoryOAuthStateStore())
 }
 
 // BuildInfo contains build information
