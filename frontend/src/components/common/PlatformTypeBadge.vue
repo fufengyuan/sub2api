@@ -93,6 +93,9 @@ const platformLabel = computed(() => {
   if (props.platform === 'kimi') return 'Kimi'
   if (props.platform === 'zhipu') return 'Zhipu GLM'
   if (props.platform === 'deepseek') return 'DeepSeek'
+  if (props.platform === 'workbuddy') return 'WorkBuddy'
+  if (props.platform === 'traework') return 'TraeWork'
+  if (props.platform === 'qoder') return 'Qoder'
   return 'Gemini'
 })
 
@@ -200,6 +203,15 @@ const platformClass = computed(() => {
   if (props.platform === 'deepseek') {
     return 'bg-teal-100 text-teal-700 dark:bg-teal-900/30 dark:text-teal-400'
   }
+  if (props.platform === 'workbuddy') {
+    return 'bg-rose-100 text-rose-700 dark:bg-rose-900/30 dark:text-rose-400'
+  }
+  if (props.platform === 'traework') {
+    return 'bg-sky-100 text-sky-700 dark:bg-sky-900/30 dark:text-sky-400'
+  }
+  if (props.platform === 'qoder') {
+    return 'bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400'
+  }
   return 'bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400'
 })
 
@@ -224,6 +236,15 @@ const typeClass = computed(() => {
   }
   if (props.platform === 'deepseek') {
     return 'bg-teal-100 text-teal-600 dark:bg-teal-900/30 dark:text-teal-400'
+  }
+  if (props.platform === 'workbuddy') {
+    return 'bg-rose-100 text-rose-600 dark:bg-rose-900/30 dark:text-rose-400'
+  }
+  if (props.platform === 'traework') {
+    return 'bg-sky-100 text-sky-600 dark:bg-sky-900/30 dark:text-sky-400'
+  }
+  if (props.platform === 'qoder') {
+    return 'bg-amber-100 text-amber-600 dark:bg-amber-900/30 dark:text-amber-400'
   }
   return 'bg-blue-100 text-blue-600 dark:bg-blue-900/30 dark:text-blue-400'
 })
