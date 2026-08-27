@@ -347,13 +347,26 @@ const loadAvailableModels = async () => {
   loadingModels.value = true
   selectedModelId.value = '' // Reset selection before loading
   try {
-    const models = await adminAPI.accounts.getAvailableModels(props.account.id)
-    availableModels.value = props.account.platform === 'gemini' || props.account.platform === 'antigravity'
-      ? sortTestModels(models)
-      : models
+    const account = props.account
+    const isCnUpstream = account.platform === 'workbuddy' || account.platform === 'traework' || account.platform === 'qoder'
+    if (isCnUpstream) {
+      // 三渠道：返回账号映射后的真实上游模型（而非默认 Claude 模型）
+      const upstream = await adminAPI.accounts.getCnUpstreamModels(account.id)
+      availableModels.value = upstream.map((m) => ({
+        id: m.id,
+        type: 'model',
+        display_name: m.name || m.id,
+        created_at: ''
+      }))
+    } else {
+      const models = await adminAPI.accounts.getAvailableModels(account.id)
+      availableModels.value = account.platform === 'gemini' || account.platform === 'antigravity'
+        ? sortTestModels(models)
+        : models
+    }
     // Default selection by platform
     if (availableModels.value.length > 0) {
-      if (props.account.platform === 'gemini') {
+      if (account.platform === 'gemini') {
         selectedModelId.value = availableModels.value[0].id
       } else {
         // Try to select Sonnet as default, otherwise use first model
