@@ -11,6 +11,7 @@ import (
 
 	"github.com/Wei-Shaw/sub2api/internal/cnupstream/auth"
 	"github.com/Wei-Shaw/sub2api/internal/cnupstream/provider"
+	"github.com/Wei-Shaw/sub2api/internal/cnupstream/scheduler"
 )
 
 // fakeCnRepo 账号仓储切片 stub（ListByPlatform + GetByID + Update）。
@@ -217,5 +218,147 @@ func TestCnUpstreamFetchUpstreamModels(t *testing.T) {
 	}
 	if len(models) != 1 || models[0].ID != "qoder-max" {
 		t.Fatalf("models = %+v, want [qoder-max]", models)
+	}
+}
+
+// PersistAuth 把刷新后的凭证按 uid 回写 ent credentials，
+// 且必须保留既有业务键（model_mapping/creditsRemain 等，整行覆盖不可抹掉）。
+func TestCnUpstreamPersistAuth(t *testing.T) {
+	acct := cnTestAccount(14, PlatformWorkBuddy)
+	acct.Credentials["model_mapping"] = map[string]any{"gpt-x": "gpt-y"}
+	acct.Credentials["creditsRemain"] = int64(77)
+	repo := &fakeCnRepo{accounts: map[int64]*Account{14: acct}}
+	svc := newCnUpstreamTestSvc(repo, &fakeCnUpstream{})
+	if err := svc.ReloadAccounts(context.Background()); err != nil {
+		t.Fatalf("ReloadAccounts: %v", err)
+	}
+
+	a := &auth.Auth{UID: "14", AccessToken: "new-at", RefreshToken: "new-rt", ExpiresAt: 123}
+	if err := svc.PersistAuth(a); err != nil {
+		t.Fatalf("PersistAuth: %v", err)
+	}
+	if len(repo.updated) != 1 {
+		t.Fatalf("expected 1 update, got %d", len(repo.updated))
+	}
+	creds := repo.updated[0].Credentials
+	if creds["accessToken"] != "new-at" || creds["refreshToken"] != "new-rt" || creds["expiresAt"] != int64(123) {
+		t.Fatalf("credentials = %v", creds)
+	}
+	if creds["model_mapping"] == nil {
+		t.Fatalf("model_mapping must survive PersistAuth, got %v", creds)
+	}
+	if n, _ := creds["creditsRemain"].(int64); n != 77 {
+		t.Fatalf("creditsRemain must survive PersistAuth, got %v", creds["creditsRemain"])
+	}
+}
+
+// PersistCheckinResult 落库 lastCheckinAt/lastCheckinResult/creditsRemain 并同步池。
+func TestCnUpstreamPersistCheckinResult(t *testing.T) {
+	repo := &fakeCnRepo{accounts: map[int64]*Account{15: cnTestAccount(15, PlatformTraeWork)}}
+	svc := newCnUpstreamTestSvc(repo, &fakeCnUpstream{})
+	if err := svc.ReloadAccounts(context.Background()); err != nil {
+		t.Fatalf("ReloadAccounts: %v", err)
+	}
+
+	svc.PersistCheckinResult(PlatformTraeWork, scheduler.CheckinResult{
+		UID: "15", OK: true, Msg: "ok", Remain: 888, HasRemain: true,
+	})
+	if len(repo.updated) != 1 {
+		t.Fatalf("expected 1 update, got %d", len(repo.updated))
+	}
+	creds := repo.updated[0].Credentials
+	if creds["creditsRemain"] != int64(888) {
+		t.Fatalf("creditsRemain = %v, want 888", creds["creditsRemain"])
+	}
+	if at, _ := creds["lastCheckinAt"].(string); at == "" {
+		t.Fatalf("lastCheckinAt missing: %v", creds["lastCheckinAt"])
+	}
+	if res, _ := creds["lastCheckinResult"].(string); res != "ok" {
+		t.Fatalf("lastCheckinResult = %v, want ok", creds["lastCheckinResult"])
+	}
+	st, ok := svc.PlatformPool(PlatformTraeWork).Status("15")
+	if !ok || st.Credits != 888 {
+		t.Fatalf("pool credits = %+v, want 888", st)
+	}
+}
+
+// 失败签到也落 lastCheckin 状态（展示失败原因），但不写余额。
+func TestCnUpstreamPersistCheckinResult_Failure(t *testing.T) {
+	repo := &fakeCnRepo{accounts: map[int64]*Account{16: cnTestAccount(16, PlatformWorkBuddy)}}
+	svc := newCnUpstreamTestSvc(repo, &fakeCnUpstream{})
+	if err := svc.ReloadAccounts(context.Background()); err != nil {
+		t.Fatalf("ReloadAccounts: %v", err)
+	}
+
+	svc.PersistCheckinResult(PlatformWorkBuddy, scheduler.CheckinResult{
+		UID: "16", OK: false, Msg: "session expired", HasRemain: false,
+	})
+	if len(repo.updated) != 1 {
+		t.Fatalf("expected 1 update, got %d", len(repo.updated))
+	}
+	creds := repo.updated[0].Credentials
+	if res, _ := creds["lastCheckinResult"].(string); res != "session expired" {
+		t.Fatalf("lastCheckinResult = %v, want failure msg", creds["lastCheckinResult"])
+	}
+	if _, exists := creds["creditsRemain"]; exists {
+		t.Fatalf("creditsRemain should not be touched on failure without remain: %v", creds)
+	}
+}
+
+// uid 不在 acctRefs 时按 uid 解析账号 ID 重建引用（对齐 RefreshToken 兜底）。
+func TestCnUpstreamPersistCheckinResult_UnknownUID(t *testing.T) {
+	repo := &fakeCnRepo{accounts: map[int64]*Account{17: cnTestAccount(17, PlatformWorkBuddy)}}
+	svc := newCnUpstreamTestSvc(repo, &fakeCnUpstream{})
+
+	svc.PersistCheckinResult(PlatformWorkBuddy, scheduler.CheckinResult{
+		UID: "17", OK: true, Msg: "ok", Remain: 66, HasRemain: true,
+	})
+	if len(repo.updated) != 1 {
+		t.Fatalf("expected 1 update, got %d", len(repo.updated))
+	}
+	if repo.updated[0].ID != 17 {
+		t.Fatalf("updated account ID = %d, want 17", repo.updated[0].ID)
+	}
+	if repo.updated[0].Credentials["creditsRemain"] != int64(66) {
+		t.Fatalf("creditsRemain = %v", repo.updated[0].Credentials["creditsRemain"])
+	}
+}
+
+// 手动签到 CheckinNow 同样写 lastCheckin 状态（与自动签到口径一致）。
+func TestCnUpstreamCheckinNow_WritesLastCheckin(t *testing.T) {
+	repo := &fakeCnRepo{accounts: map[int64]*Account{18: cnTestAccount(18, PlatformWorkBuddy)}}
+	up := &fakeCnUpstream{remain: 555}
+	svc := newCnUpstreamTestSvc(repo, up)
+
+	if _, err := svc.CheckinNow(context.Background(), 18); err != nil {
+		t.Fatalf("CheckinNow: %v", err)
+	}
+	if len(repo.updated) != 1 {
+		t.Fatalf("expected 1 update, got %d", len(repo.updated))
+	}
+	creds := repo.updated[0].Credentials
+	if at, _ := creds["lastCheckinAt"].(string); at == "" {
+		t.Fatalf("lastCheckinAt missing: %v", creds["lastCheckinAt"])
+	}
+	if res, _ := creds["lastCheckinResult"].(string); res != "ok" {
+		t.Fatalf("lastCheckinResult = %v, want ok", creds["lastCheckinResult"])
+	}
+}
+
+// 手动签到业务失败（已签到）也记录状态。
+func TestCnUpstreamCheckinNow_AlreadyCheckedIn_WritesLastCheckin(t *testing.T) {
+	repo := &fakeCnRepo{accounts: map[int64]*Account{19: cnTestAccount(19, PlatformTraeWork)}}
+	up := &fakeCnUpstream{checkinErr: errors.New("今日已签到")}
+	svc := newCnUpstreamTestSvc(repo, up)
+
+	if _, err := svc.CheckinNow(context.Background(), 19); err != nil {
+		t.Fatalf("CheckinNow: %v", err)
+	}
+	if len(repo.updated) != 1 {
+		t.Fatalf("expected 1 update (lastCheckin), got %d", len(repo.updated))
+	}
+	res, _ := repo.updated[0].Credentials["lastCheckinResult"].(string)
+	if res != "今日已签到" {
+		t.Fatalf("lastCheckinResult = %v, want 今日已签到", res)
 	}
 }

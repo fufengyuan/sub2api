@@ -282,6 +282,130 @@ func TestCheckinObserverReceivesFailure(t *testing.T) {
 	}
 }
 
+// PersistAuth 钩子优先于 SaveAtomic：FilePath 为空时（sub2api 场景）不再报错，
+// 由钩子接管持久化。
+func TestCheckinRefreshPersistsViaHookWithoutFilePath(t *testing.T) {
+	f := &fakeUpstream{resourceRemain: 300}
+	srv := f.server()
+	defer srv.Close()
+
+	p := pool.New("")
+	// 注意：无 FilePath，原 SaveAtomic 路径会失败。
+	a := &auth.Auth{UID: "u1", AccessToken: "old", RefreshToken: "rt", ExpiresAt: 1}
+	p.Add(a)
+	up := &upstream.Client{
+		HTTP:            srv.Client(),
+		ChatBaseCN:      srv.URL,
+		BillingBaseCN:   srv.URL,
+		ChatBaseGlobal:  srv.URL,
+		BillingBaseGlob: srv.URL,
+	}
+	var persisted atomic.Int32
+	s := New(Config{
+		Pool:       p,
+		Upstream:   up,
+		PersistAuth: func(a *auth.Auth) error {
+			persisted.Add(1)
+			return nil
+		},
+	})
+	res, err := s.CheckinAccount("u1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !res.OK {
+		t.Fatalf("checkin should succeed via persist hook: %+v", res)
+	}
+	if persisted.Load() != 1 {
+		t.Errorf("persist calls=%d want 1", persisted.Load())
+	}
+}
+
+// keepalive 刷新成功后同样走 PersistAuth 钩子。
+func TestKeepalivePersistsViaHook(t *testing.T) {
+	f := &fakeUpstream{}
+	srv := f.server()
+	defer srv.Close()
+
+	p := pool.New("")
+	p.Add(&auth.Auth{UID: "u1", AccessToken: "old", RefreshToken: "rt", ExpiresAt: 1})
+	up := &upstream.Client{
+		HTTP:            srv.Client(),
+		ChatBaseCN:      srv.URL,
+		BillingBaseCN:   srv.URL,
+		ChatBaseGlobal:  srv.URL,
+		BillingBaseGlob: srv.URL,
+	}
+	var persisted atomic.Int32
+	s := New(Config{
+		Pool:       p,
+		Upstream:   up,
+		PersistAuth: func(a *auth.Auth) error {
+			persisted.Add(1)
+			return nil
+		},
+	})
+	s.RunKeepaliveNow()
+	if persisted.Load() != 1 {
+		t.Errorf("persist calls=%d want 1", persisted.Load())
+	}
+}
+
+// 批量签到/保活前应触发 Reload 钩子（管理端新增账号动态进池）。
+func TestBatchRunsTriggerReload(t *testing.T) {
+	f := &fakeUpstream{resourceRemain: 100}
+	srv := f.server()
+	defer srv.Close()
+
+	p := pool.New("")
+	p.Add(&auth.Auth{UID: "u1", AccessToken: "at", RefreshToken: "rt", ExpiresAt: 9999999999})
+	up := &upstream.Client{
+		HTTP:            srv.Client(),
+		ChatBaseCN:      srv.URL,
+		BillingBaseCN:   srv.URL,
+		ChatBaseGlobal:  srv.URL,
+		BillingBaseGlob: srv.URL,
+	}
+	var reloads atomic.Int32
+	s := New(Config{
+		Pool:     p,
+		Upstream: up,
+		Reload:   func() { reloads.Add(1) },
+	})
+	s.RunCheckinNow()
+	if reloads.Load() != 1 {
+		t.Errorf("checkin reloads=%d want 1", reloads.Load())
+	}
+	s.RunKeepaliveNow()
+	if reloads.Load() != 2 {
+		t.Errorf("after keepalive reloads=%d want 2", reloads.Load())
+	}
+}
+
+// 批量签到账号间按 CheckinBackoff 退避（非最后一个账号后 sleep）。
+func TestCheckinBackoffBetweenAccounts(t *testing.T) {
+	f := &fakeUpstream{resourceRemain: 100}
+	srv := f.server()
+	defer srv.Close()
+
+	p := pool.New("")
+	p.Add(&auth.Auth{UID: "u1", AccessToken: "at", RefreshToken: "rt", ExpiresAt: 9999999999})
+	p.Add(&auth.Auth{UID: "u2", AccessToken: "at", RefreshToken: "rt", ExpiresAt: 9999999999})
+	up := &upstream.Client{
+		HTTP:            srv.Client(),
+		ChatBaseCN:      srv.URL,
+		BillingBaseCN:   srv.URL,
+		ChatBaseGlobal:  srv.URL,
+		BillingBaseGlob: srv.URL,
+	}
+	s := New(Config{Pool: p, Upstream: up, CheckinBackoff: 150 * time.Millisecond})
+	start := time.Now()
+	s.RunCheckinNow()
+	if elapsed := time.Since(start); elapsed < 150*time.Millisecond {
+		t.Errorf("elapsed=%v want >= 150ms (one backoff between two accounts)", elapsed)
+	}
+}
+
 func TestCheckinAccountRecordsResult(t *testing.T) {
 	f := &fakeUpstream{resourceRemain: 300}
 	srv := f.server()

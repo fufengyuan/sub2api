@@ -284,18 +284,30 @@
             </div>
           </template>
           <template #cell-credits="{ row }">
-            <div v-if="isCnUpstreamRow(row)" class="flex items-center gap-1.5">
-              <span class="font-mono text-sm text-gray-700 dark:text-gray-300" :title="t('admin.accounts.cnCredits.detailRemain')">
-                {{ getCreditsRemain(row) }}
-              </span>
-              <button
-                @click.stop="handleRefreshCredits(row)"
-                :disabled="refreshingCredits.has(row.id)"
-                class="rounded p-1 text-gray-400 transition-colors hover:bg-gray-100 hover:text-cyan-600 disabled:cursor-not-allowed disabled:opacity-50 dark:hover:bg-dark-700 dark:hover:text-cyan-400"
-                :title="t('admin.accounts.cnCredits.refreshCredits')"
+            <div v-if="isCnUpstreamRow(row)">
+              <div class="flex items-center gap-1.5">
+                <span class="font-mono text-sm text-gray-700 dark:text-gray-300" :title="t('admin.accounts.cnCredits.detailRemain')">
+                  {{ getCreditsRemain(row) }}
+                </span>
+                <button
+                  @click.stop="handleRefreshCredits(row)"
+                  :disabled="refreshingCredits.has(row.id)"
+                  class="rounded p-1 text-gray-400 transition-colors hover:bg-gray-100 hover:text-cyan-600 disabled:cursor-not-allowed disabled:opacity-50 dark:hover:bg-dark-700 dark:hover:text-cyan-400"
+                  :title="t('admin.accounts.cnCredits.refreshCredits')"
+                >
+                  <Icon name="refresh" size="xs" :class="[refreshingCredits.has(row.id) ? 'animate-spin' : '']" />
+                </button>
+              </div>
+              <div
+                v-if="formatLastCheckinAt(row)"
+                class="mt-0.5 text-[10px] leading-4 text-gray-400 dark:text-dark-500"
+                :title="getLastCheckinTooltip(row)"
               >
-                <Icon name="refresh" size="xs" :class="[refreshingCredits.has(row.id) ? 'animate-spin' : '']" />
-              </button>
+                {{ t('admin.accounts.cnCredits.lastCheckin') }} {{ formatLastCheckinAt(row) }}
+                <span :class="isLastCheckinOk(row) ? 'text-emerald-500' : 'text-red-500'">
+                  · {{ isLastCheckinOk(row) ? t('admin.accounts.cnCredits.lastCheckinOk') : t('admin.accounts.cnCredits.lastCheckinFailed') }}
+                </span>
+              </div>
             </div>
             <span v-else class="text-sm text-gray-400 dark:text-dark-500">-</span>
           </template>
@@ -2417,6 +2429,32 @@ const applyCreditsRemain = (a: Account, remain: number) => {
   if (!a.credentials) a.credentials = {}
   ;(a.credentials as Record<string, unknown>).creditsRemain = remain
 }
+// ── 上次签到状态（自动/手动签到统一写 credentials.lastCheckinAt/lastCheckinResult）──
+const getLastCheckinAt = (row: any): string => {
+  const v = (row?.credentials as Record<string, unknown> | undefined)?.lastCheckinAt
+  return typeof v === 'string' ? v : ''
+}
+const getLastCheckinResult = (row: any): string => {
+  const v = (row?.credentials as Record<string, unknown> | undefined)?.lastCheckinResult
+  return typeof v === 'string' ? v : ''
+}
+const formatLastCheckinAt = (row: any): string => {
+  const d = new Date(getLastCheckinAt(row))
+  if (!getLastCheckinAt(row) || Number.isNaN(d.getTime())) return ''
+  const p = (n: number) => String(n).padStart(2, '0')
+  return `${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`
+}
+const isLastCheckinOk = (row: any): boolean => getLastCheckinResult(row) === 'ok'
+const getLastCheckinTooltip = (row: any): string =>
+  isLastCheckinOk(row)
+    ? t('admin.accounts.cnCredits.lastCheckinOk')
+    : getLastCheckinResult(row) || t('admin.accounts.cnCredits.lastCheckinFailed')
+const applyCheckinState = (a: Account, ok: boolean, message: string) => {
+  if (!a.credentials) a.credentials = {}
+  const creds = a.credentials as Record<string, unknown>
+  creds.lastCheckinAt = new Date().toISOString()
+  creds.lastCheckinResult = ok ? 'ok' : message
+}
 const handleRefreshCredits = async (a: Account) => {
   refreshingCredits.value.add(a.id)
   try {
@@ -2435,8 +2473,10 @@ const handleCheckin = async (a: Account) => {
     const result = await adminAPI.accounts.checkinCnAccount(a.id)
     if (result.success) {
       applyCreditsRemain(a, result.credits_remain)
+      applyCheckinState(a, true, result.message)
       appStore.showSuccess(t('admin.accounts.cnCredits.checkinSuccess', { credits: result.credits_remain }))
     } else {
+      applyCheckinState(a, false, result.message)
       appStore.showError(t('admin.accounts.cnCredits.checkinFailed', { message: result.message }))
     }
   } catch (error) {

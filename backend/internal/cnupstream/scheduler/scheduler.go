@@ -26,6 +26,13 @@ type Config struct {
 	CheckinHours   []int  // 旧配置兼容，整点小时
 	CheckinMinutes []int  // 当天分钟数，优先于 CheckinHours
 	KeepaliveHours []int  // 默认 [22]
+	// PersistAuth token 刷新成功后的持久化钩子（如回写数据库）；
+	// 为 nil 时退回 SaveAtomic 文件写（原 workbuddy-wild 行为）。
+	PersistAuth func(a *auth.Auth) error
+	// Reload 批量签到/保活开始前的账号池刷新钩子（感知新增/删除账号）。
+	Reload func()
+	// CheckinBackoff 批量签到账号间的退避间隔；0 表示不退避。
+	CheckinBackoff time.Duration
 }
 
 // Scheduler 调度器。
@@ -254,14 +261,19 @@ type CheckinResult struct {
 // 冷却中的账号也参与（签到就是为了解冻它们）；禁用的跳过。
 func (s *Scheduler) RunCheckinNow() {
 	name := s.name()
-	log.Printf("checkin batch start platform=%s accounts=%d", name, len(s.cfg.Pool.List()))
-	for _, st := range s.cfg.Pool.List() {
+	s.reload()
+	sts := s.cfg.Pool.List()
+	log.Printf("checkin batch start platform=%s accounts=%d", name, len(sts))
+	for i, st := range sts {
 		if st.Disabled {
 			log.Printf("checkin skip platform=%s uid=%s reason=disabled", name, st.UID)
 			continue
 		}
 		r := s.checkinOne(st.UID)
 		log.Printf("checkin result platform=%s uid=%s ok=%t msg=%s remain=%d has_remain=%t", name, st.UID, r.OK, r.Msg, r.Remain, r.HasRemain)
+		if s.cfg.CheckinBackoff > 0 && i < len(sts)-1 {
+			time.Sleep(s.cfg.CheckinBackoff)
+		}
 	}
 	log.Printf("checkin batch done platform=%s", name)
 }
@@ -371,12 +383,37 @@ func (s *Scheduler) refreshForCheckin(a *auth.Auth, uid string) error {
 		log.Printf("refresh failed platform=%s uid=%s err=%v", name, uid, err)
 		return err
 	}
-	if err := a.SaveAtomic(); err != nil {
-		log.Printf("refresh save failed platform=%s uid=%s err=%v", name, uid, err)
-		return fmt.Errorf("refresh save: %w", err)
+	if err := s.persistAuth(a, uid, "checkin"); err != nil {
+		return err
 	}
 	log.Printf("refresh success platform=%s uid=%s expires_at=%d", name, uid, a.ExpiresAt)
 	return nil
+}
+
+// persistAuth 持久化刷新后的凭证：优先走 PersistAuth 钩子（回写数据库等），
+// 无钩子时退回本地文件 SaveAtomic（原 workbuddy-wild 行为）。
+func (s *Scheduler) persistAuth(a *auth.Auth, uid, reason string) error {
+	name := s.name()
+	if s.cfg.PersistAuth != nil {
+		if err := s.cfg.PersistAuth(a); err != nil {
+			log.Printf("persist auth failed platform=%s uid=%s reason=%s err=%v", name, uid, reason, err)
+			return fmt.Errorf("persist auth: %w", err)
+		}
+		return nil
+	}
+	if err := a.SaveAtomic(); err != nil {
+		log.Printf("refresh save failed platform=%s uid=%s reason=%s err=%v", name, uid, reason, err)
+		return fmt.Errorf("refresh save: %w", err)
+	}
+	return nil
+}
+
+// reload 批量任务前刷新账号池（感知管理端新增/删除账号）；钩子未设置时跳过。
+func (s *Scheduler) reload() {
+	if s.cfg.Reload == nil {
+		return
+	}
+	s.cfg.Reload()
 }
 
 func isSessionDead(err error) bool {
@@ -387,6 +424,7 @@ func isSessionDead(err error) bool {
 // RunKeepaliveNow 立即对所有账号刷新 token；session 死亡的自动禁用。
 func (s *Scheduler) RunKeepaliveNow() {
 	name := s.name()
+	s.reload()
 	log.Printf("refresh batch start platform=%s", name)
 	for _, st := range s.cfg.Pool.List() {
 		if st.Disabled {
@@ -411,9 +449,8 @@ func (s *Scheduler) RunKeepaliveNow() {
 			s.notifyRefresh(st.UID, false, err.Error())
 			continue
 		}
-		if err := a.SaveAtomic(); err != nil {
-			log.Printf("refresh save failed platform=%s uid=%s err=%v", name, st.UID, err)
-			s.notifyRefresh(st.UID, false, "refresh save: "+err.Error())
+		if err := s.persistAuth(a, st.UID, "keepalive"); err != nil {
+			s.notifyRefresh(st.UID, false, err.Error())
 			continue
 		}
 		log.Printf("refresh success platform=%s uid=%s expires_at=%d", name, st.UID, a.ExpiresAt)

@@ -14,6 +14,7 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/cnupstream/auth"
 	"github.com/Wei-Shaw/sub2api/internal/cnupstream/pool"
 	"github.com/Wei-Shaw/sub2api/internal/cnupstream/provider"
+	"github.com/Wei-Shaw/sub2api/internal/cnupstream/scheduler"
 	"github.com/Wei-Shaw/sub2api/internal/cnupstream/qoder"
 	"github.com/Wei-Shaw/sub2api/internal/cnupstream/traework"
 	"github.com/Wei-Shaw/sub2api/internal/cnupstream/upstream"
@@ -215,20 +216,39 @@ func (s *CnUpstreamService) RefreshToken(platform, uid string) error {
 	if err := rt.upstream.RefreshToken(a); err != nil {
 		return err
 	}
+	return s.PersistAuth(a)
+}
+
+// accountByUID 取 uid 对应的账号引用；无引用时按 uid 解析账号 ID 重建（仅 ID）。
+func (s *CnUpstreamService) accountByUID(uid string) *Account {
+	s.mu.Lock()
+	acct := s.acctRefs[uid]
+	s.mu.Unlock()
+	if acct != nil {
+		return acct
+	}
+	id, _ := strconv.ParseInt(uid, 10, 64)
+	return &Account{ID: id}
+}
+
+// PersistAuth 把刷新后的 auth 凭证按 uid 回写 ent credentials。
+// 在既有 credentials 上合并鉴权字段（COW），保留 model_mapping/creditsRemain
+// 等业务键——仓储 Update 是整行覆盖，整包替换会抹掉它们。
+// 仓储未实现 Update 时静默跳过（无持久化能力不阻断刷新流程）。
+func (s *CnUpstreamService) PersistAuth(a *auth.Auth) error {
 	upd, ok := s.accountRepo.(cnUpdater)
 	if !ok {
 		return nil
 	}
-	s.mu.Lock()
-	acct := s.acctRefs[uid]
-	s.mu.Unlock()
-	if acct == nil {
-		// 未知引用时以 uid 重建，仅回写 credentials。
-		id, _ := strconv.ParseInt(uid, 10, 64)
-		acct = &Account{ID: id}
+	acct := s.accountByUID(a.UID)
+	// COW：副本写，避免与并发读共享引用竞态。
+	creds := copyCredentials(acct.Credentials)
+	for k, v := range credsFromAuth(a) {
+		creds[k] = v
 	}
-	acct.Credentials = credsFromAuth(a)
-	return upd.Update(context.Background(), acct)
+	cp := *acct
+	cp.Credentials = creds
+	return upd.Update(context.Background(), &cp)
 }
 
 // credsFromAuth 将 auth.Auth 序列化为 credentials map（刷新后回写用）。
@@ -330,19 +350,57 @@ func (s *CnUpstreamService) loadCnAccount(ctx context.Context, accountID int64) 
 }
 
 // persistCreditsRemain 把余额写入账号 credentials（驼峰键 creditsRemain）并回写仓储。
+// COW 副本写，避免直接改共享引用与并发读竞态。
 func (s *CnUpstreamService) persistCreditsRemain(ctx context.Context, acct *Account, uid string, remain int64, p *pool.Pool) {
-	if acct.Credentials == nil {
-		acct.Credentials = map[string]any{}
-	}
-	acct.Credentials["creditsRemain"] = remain
+	creds := copyCredentials(acct.Credentials)
+	creds["creditsRemain"] = remain
+	cp := *acct
+	cp.Credentials = creds
 	if upd, ok := s.accountRepo.(cnUpdater); ok {
-		if err := upd.Update(ctx, acct); err != nil {
-			log.Printf("cnupstream: persist credits for account %d failed: %v", acct.ID, err)
+		if err := upd.Update(ctx, &cp); err != nil {
+			log.Printf("cnupstream: persist credits for account %d failed: %v", cp.ID, err)
 		}
 	}
 	if p != nil {
 		p.SetCredits(uid, remain)
 		p.ReenableIfCredits(uid, remain)
+	}
+}
+
+// copyCredentials 浅拷贝 credentials map（COW 基础）。
+func copyCredentials(src map[string]any) map[string]any {
+	out := make(map[string]any, len(src)+1)
+	for k, v := range src {
+		out[k] = v
+	}
+	return out
+}
+
+// PersistCheckinResult 把签到结果落库：credentials 写 lastCheckinAt（RFC3339）
+// 与 lastCheckinResult（结果消息），携带余额时同步 creditsRemain，并刷新内存池
+// （SetCredits + 按余额解冻）。自动签到观察者与手动签到共用此口径。
+func (s *CnUpstreamService) PersistCheckinResult(platform string, r scheduler.CheckinResult) {
+	rt, ok := s.platforms[platform]
+	if !ok {
+		return
+	}
+	acct := s.accountByUID(r.UID)
+	creds := copyCredentials(acct.Credentials)
+	creds["lastCheckinAt"] = time.Now().Format(time.RFC3339)
+	creds["lastCheckinResult"] = r.Msg
+	if r.HasRemain {
+		creds["creditsRemain"] = r.Remain
+	}
+	cp := *acct
+	cp.Credentials = creds
+	if upd, ok := s.accountRepo.(cnUpdater); ok {
+		if err := upd.Update(context.Background(), &cp); err != nil {
+			log.Printf("cnupstream: persist checkin result for account %d failed: %v", cp.ID, err)
+		}
+	}
+	if r.HasRemain {
+		rt.pool.SetCredits(r.UID, r.Remain)
+		rt.pool.ReenableIfCredits(r.UID, r.Remain)
 	}
 }
 
@@ -377,6 +435,7 @@ func (s *CnUpstreamService) ResourceDetail(ctx context.Context, accountID int64)
 // CheckinNow 单账号立即签到：签到成功后刷新余额并按余额解冻账号
 // （语义对齐原 workbuddy-wild scheduler.checkinOne）。
 // 业务失败（如「今日已签到」「无签到活动」）返回 Success=false + Message，不返回 error。
+// 结果统一经 PersistCheckinResult 落库（lastCheckin 状态 + 余额），与自动签到口径一致。
 func (s *CnUpstreamService) CheckinNow(ctx context.Context, accountID int64) (*CnCheckinResult, error) {
 	rt, acct, a, err := s.loadCnAccount(ctx, accountID)
 	if err != nil {
@@ -384,15 +443,17 @@ func (s *CnUpstreamService) CheckinNow(ctx context.Context, accountID int64) (*C
 	}
 	if err := rt.upstream.DailyCheckin(a); err != nil {
 		rt.pool.RecordCheckin(a.UID, false, err.Error())
+		s.PersistCheckinResult(acct.Platform, scheduler.CheckinResult{UID: a.UID, Msg: err.Error()})
 		return &CnCheckinResult{Success: false, Message: err.Error()}, nil
 	}
 	rt.pool.RecordCheckin(a.UID, true, "ok")
 	// 签到成功后刷新余额（签到通常发放积分，立即同步池与列表展示）。
 	remain := int64(0)
+	hasRemain := false
 	if r, rerr := rt.upstream.UserResource(a); rerr == nil {
-		remain = r
-		s.persistCreditsRemain(ctx, acct, a.UID, remain, rt.pool)
+		remain, hasRemain = r, true
 	}
+	s.PersistCheckinResult(acct.Platform, scheduler.CheckinResult{UID: a.UID, OK: true, Msg: "ok", Remain: remain, HasRemain: hasRemain})
 	return &CnCheckinResult{Success: true, Message: "ok", CreditsRemain: remain}, nil
 }
 
