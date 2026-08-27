@@ -406,7 +406,8 @@ func (s *AccountTestService) testCnUpstreamAccountConnection(c *gin.Context, acc
 
 	agg, err := up.Aggregate(rc)
 	if err != nil {
-		return s.sendErrorAndEnd(c, fmt.Sprintf("%s aggregate stream failed: %v", account.Platform, err))
+		// SOLO config_name 区分大小写：附上实际发送的模型名，提示与「拉取上游模型」核对。
+		return s.sendErrorAndEnd(c, fmt.Sprintf("%s 上游拒绝了模型 %q: %v（请核对账号编辑弹窗「拉取上游模型」返回的准确模型名，含大小写）", account.Platform, upstreamModel, err))
 	}
 	content := ""
 	if raw, merr := json.Marshal(agg); merr == nil {
