@@ -769,14 +769,29 @@ const loadAvailableModels = async () => {
     const account = props.account
     const isCnUpstream = account.platform === 'workbuddy' || account.platform === 'traework' || account.platform === 'qoder'
     if (isCnUpstream) {
-      // 三渠道：返回账号映射后的真实上游模型（而非默认 Claude 模型）
-      const upstream = await adminAPI.accounts.getCnUpstreamModels(account.id)
-      availableModels.value = upstream.map((m) => ({
-        id: m.id,
-        type: 'model',
-        display_name: m.name || m.id,
-        created_at: ''
-      }))
+      // 三渠道：配置了模型映射时显示映射后的对外模型（测试请求经网关 GetMappedModel
+      // 命中映射）；未配置映射时回退上游真实模型。
+      const rawMapping = (account.credentials as Record<string, unknown> | undefined)?.model_mapping
+      const mappingKeys =
+        rawMapping && typeof rawMapping === 'object' && !Array.isArray(rawMapping)
+          ? Object.keys(rawMapping as Record<string, unknown>).filter((k) => k.trim())
+          : []
+      if (mappingKeys.length > 0) {
+        availableModels.value = mappingKeys.sort().map((id) => ({
+          id,
+          type: 'model',
+          display_name: id,
+          created_at: ''
+        }))
+      } else {
+        const upstream = await adminAPI.accounts.getCnUpstreamModels(account.id)
+        availableModels.value = upstream.map((m) => ({
+          id: m.id,
+          type: 'model',
+          display_name: m.name || m.id,
+          created_at: ''
+        }))
+      }
     } else {
       const models = await adminAPI.accounts.getAvailableModels(account.id)
       availableModels.value = account.platform === 'gemini' || account.platform === 'antigravity'
