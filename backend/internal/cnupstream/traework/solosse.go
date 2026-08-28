@@ -26,6 +26,7 @@ package traework
 import (
 	"bufio"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -304,6 +305,11 @@ func sortInts(a []int) {
 	}
 }
 
+// ErrStreamErrorBeforeOutput 表示上游 SSE 流在尚未产出任何内容时就返回了业务错误
+//（如 4008 间歇配额超限 / 1005 权益不足）。流式转换层据此不写错误 chunk，交由
+// 上层在未写出响应时切到下一个候选平台/账号。
+var ErrStreamErrorBeforeOutput = errors.New("cnupstream: upstream business error before any output")
+
 // Stream 流式转换：SOLO SSE → OpenAI SSE chunk，每 chunk flush，保证至少一个 [DONE]。
 // 调用方必须先设置过 status 200；本函数自设 SSE headers。
 func Stream(w http.ResponseWriter, r io.Reader) error {
@@ -311,13 +317,15 @@ func Stream(w http.ResponseWriter, r io.Reader) error {
 }
 
 // StreamWithError 同 Stream，额外在遇到上游 event:error 时回调 onErr（非 nil），
-// 供调用方冷却账号/记录日志；错误信息同时注入 SSE 事件流。
-func StreamWithError(w http.ResponseWriter, r io.Reader, onErr func(*SOLOStreamError)) error {
+// 供调用方冷却账号/记录日志。若在未产出任何内容时首遇 error，则不写错误 chunk、
+// 直接返回 ErrStreamErrorBeforeOutput，方便上层在尚未写出响应时 fallback；
+// 已产出过内容则照常透传错误 chunk，onErr 仅作通知。
+func StreamWithError(w http.ResponseWriter, r io.Reader, onErr func(*SOLOStreamError) bool) error {
 	return streamOpts(w, r, onErr)
 }
 
 // streamOpts Stream 的可选参数版本。
-func streamOpts(w http.ResponseWriter, r io.Reader, onErr func(*SOLOStreamError)) error {
+func streamOpts(w http.ResponseWriter, r io.Reader, onErr func(*SOLOStreamError) bool) error {
 	h := w.Header()
 	h.Set("Content-Type", "text/event-stream")
 	h.Set("Cache-Control", "no-cache")
@@ -329,6 +337,7 @@ func streamOpts(w http.ResponseWriter, r io.Reader, onErr func(*SOLOStreamError)
 	id := fmt.Sprintf("chatcmpl-%d", time.Now().UnixNano())
 	var pendingUsage map[string]any
 	sawDone := false
+	sawOutput := false
 	st := &sseState{}
 	writeChunk := func(delta map[string]any, finish string) error {
 		chunk := map[string]any{
@@ -404,6 +413,7 @@ func streamOpts(w http.ResponseWriter, r io.Reader, onErr func(*SOLOStreamError)
 					}
 				}
 				if len(delta) > 0 {
+					sawOutput = true
 					if err := writeChunk(delta, ""); err != nil {
 						return err
 					}
@@ -419,13 +429,21 @@ func streamOpts(w http.ResponseWriter, r io.Reader, onErr func(*SOLOStreamError)
 				}
 				sawDone = true
 			case "error":
-				// 上游 SOLO 业务错误（1005 权益/1001 模型不可用等）：
-				// 以标准 OpenAI SSE chunk 的 delta.content 返回错误描述，
-				// finish_reason 设为 error 避免客户端持续等待。
+				// 上游 SOLO 业务错误（1005 权益 / 4008 间歇配额超限 / 1001 模型不可用等）。
 				se := &SOLOStreamError{Code: ev.ErrorCode, Msg: ev.ErrorMessage}
-				if onErr != nil {
-					onErr(se)
+				// 未产出任何内容时首遇 error：交给上层 fallback（不写错误 chunk、
+				// 不写 [DONE]，直接返回 sentinel 错误让上层在未写出响应时切平台）。
+				if !sawOutput {
+					if onErr != nil && onErr(se) {
+						return ErrStreamErrorBeforeOutput
+					}
+				} else {
+					if onErr != nil {
+						onErr(se)
+					}
 				}
+				// 已产出过内容（或 onErr 不要求停止）：以标准 OpenAI SSE chunk 的
+				// delta.content 返回错误描述，finish_reason 设为 stop 避免客户端持续等待。
 				msg := fmt.Sprintf("solo error code=%d msg=%s", ev.ErrorCode, ev.ErrorMessage)
 				if err := writeChunk(map[string]any{"content": msg}, "stop"); err != nil {
 					return err

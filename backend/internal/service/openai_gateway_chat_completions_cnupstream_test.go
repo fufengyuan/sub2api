@@ -252,3 +252,55 @@ func TestForwardCnUpstreamFallbackAllPlatformsUnavailable(t *testing.T) {
 		t.Errorf("err should reference unavailability, got: %v", err)
 	}
 }
+
+// soloErrorOnlySSE 上游 SSE 流：未产出任何内容，第一时间返回 event:error（模拟 4008 间歇配额超限）。
+const soloErrorOnlySSE string = "event:metadata\ndata:{}\n\n" +
+	"event:error\ndata:{\"code\":4008,\"message\":\"Your requests have exceeded the quota.\"}\n\n"
+
+// TestForwardCnUpstreamStreamErrorBeforeOutputFallsBack 验证：主平台流内未产出内容即返回业务错误
+//（间歇 4008）时，会切到下一个候选平台，而不是把错误文本回给客户端。
+func TestForwardCnUpstreamStreamErrorBeforeOutputFallsBack(t *testing.T) {
+	svc := newCnGatewaySvc(func(platform string, _ []byte) (io.ReadCloser, int, []byte, error) {
+		if platform == PlatformTraeWork {
+			// 主平台未产出内容即 4008
+			return io.NopCloser(strings.NewReader(soloErrorOnlySSE)), 200, nil, nil
+		}
+		if platform == PlatformWorkBuddy {
+			// 候选平台健康，返回正常 SSE
+			return io.NopCloser(strings.NewReader(cnUpstreamSSEFixture)), 200, nil, nil
+		}
+		t.Fatalf("unexpected platform=%q", platform)
+		return nil, 0, nil, errors.New("unexpected platform")
+	})
+
+	ctx := WithCompositeCandidates(context.Background(), []CompositeRouteCandidate{
+		{Platform: PlatformTraeWork},
+		{Platform: PlatformWorkBuddy},
+	})
+
+	gin.SetMode(gin.TestMode)
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest("POST", "/v1/chat/completions", nil)
+
+	res, err := svc.forwardCnUpstreamChatCompletions(ctx, c, &Account{Platform: PlatformTraeWork},
+		[]byte(`{"model":"glm-5.2","stream":true,"messages":[]}`))
+	if err != nil {
+		t.Fatalf("forward should fallback to workbuddy on pre-output business error, got err: %v", err)
+	}
+	if res == nil {
+		t.Fatal("expected non-nil result")
+	}
+	// 候选 workbuddy 正常返回 usage 计费
+	if res.Usage.InputTokens != 12 || res.Usage.OutputTokens != 8 {
+		t.Errorf("usage=%+v", res.Usage)
+	}
+	// 客户端不应收到 4008 错误文本（已 fallback 到 workbuddy）
+	body := rec.Body.String()
+	if strings.Contains(body, "exceeded the quota") || strings.Contains(body, "solo error") {
+		t.Errorf("should not leak solo business error to client after fallback: %q", body)
+	}
+	if !strings.Contains(body, "你好") {
+		t.Errorf("stream output missing fallback content: %q", body)
+	}
+}

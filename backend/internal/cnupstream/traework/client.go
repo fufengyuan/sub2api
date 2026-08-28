@@ -601,6 +601,12 @@ func (c *Client) Classify(status int, body string) provider.ErrKind { return Cla
 func (c *Client) Stream(w http.ResponseWriter, r io.Reader) error   { return Stream(w, r) }
 func (c *Client) Aggregate(r io.Reader) (map[string]any, error)     { return Aggregate(r) }
 
+// StreamWithError 暴露包级 StreamWithError 为方法，供网关层在流式转发时识别
+// SSE 内业务错误（未写内容时返回 ErrStreamErrorBeforeOutput 触发跨平台 fallback）。
+func (c *Client) StreamWithError(w http.ResponseWriter, r io.Reader, onErr func(*SOLOStreamError) bool) error {
+	return StreamWithError(w, r, onErr)
+}
+
 func truncate(s string, n int) string {
 	s = strings.TrimSpace(s)
 	if len(s) > n {

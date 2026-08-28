@@ -13,6 +13,9 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/tidwall/gjson"
 	"github.com/tidwall/sjson"
+
+	"github.com/Wei-Shaw/sub2api/internal/cnupstream/provider"
+	"github.com/Wei-Shaw/sub2api/internal/cnupstream/traework"
 )
 
 // cnUpstreamPlatforms 三渠道平台标识。命中时网关 Chat Completions 直调
@@ -99,6 +102,25 @@ func (s *OpenAIGatewayService) cnFallbackPlatformOrder(ctx context.Context, prim
 	return order
 }
 
+// cnStreamWithErrorUpstream 暴露 SSE 流内业务错误检测能力的上游客户端。
+type cnStreamWithErrorUpstream interface {
+	StreamWithError(w http.ResponseWriter, r io.Reader, onErr func(*traework.SOLOStreamError) bool) error
+}
+
+// cnStream 流式转发：优先走 StreamWithError 识别 SSE 内 event:error
+//（如 4008 间歇配额超限 / 1005 权益不足），未产出内容时返回
+// traework.ErrStreamErrorBeforeOutput，让上层在未写出响应时触发跨平台 fallback；
+// 不支持该能力的上游（workbuddy/qoder）回落普通 Stream。
+func (s *OpenAIGatewayService) cnStream(upstream provider.Upstream, cw *cnUsageCapturingWriter, rc io.ReadCloser) error {
+	seu, ok := upstream.(cnStreamWithErrorUpstream)
+	if !ok {
+		return upstream.Stream(cw, rc)
+	}
+	return seu.StreamWithError(cw, rc, func(_ *traework.SOLOStreamError) bool {
+		return true // 未产出内容时要求上层 fallback
+	})
+}
+
 // forwardCnUpstreamSinglePlatform 对单个平台执行 ChatStream→SSE→usage→response 的
 // 完整转发；返回错误且尚未提交响应时，由上层切换到下一个候选平台。
 func (s *OpenAIGatewayService) forwardCnUpstreamSinglePlatform(
@@ -153,12 +175,14 @@ func (s *OpenAIGatewayService) forwardCnUpstreamSinglePlatform(
 
 	if reqStream {
 		cw := newCnUsageCapturingWriter(c.Writer, &usage)
-		if err := upstream.Stream(cw, rc); err != nil {
-			// 流已部分写出（至少状态头/首个 chunk）时照常计费，避免半途 SSE 丢计费。
+		streamErr := s.cnStream(upstream, cw, rc)
+		if streamErr != nil {
+			// 流已部分写出（至少状态头/首个 chunk）时照常计费，避免半途 SSE 丢计费；
+			// 未写出任何响应且是「未产出内容首遇业务错误」时，交由上层 fallback。
 			if cw.written > 0 {
 				return buildResult(), nil
 			}
-			return nil, err
+			return nil, streamErr
 		}
 		return buildResult(), nil
 	}
