@@ -376,9 +376,11 @@ func copyCredentials(src map[string]any) map[string]any {
 	return out
 }
 
-// PersistCheckinResult 把签到结果落库：credentials 写 lastCheckinAt（RFC3339）
-// 与 lastCheckinResult（结果消息），携带余额时同步 creditsRemain，并刷新内存池
-// （SetCredits + 按余额解冻）。自动签到观察者与手动签到共用此口径。
+// PersistCheckinResult 把签到结果落库：credentials 写 lastCheckinAt（RFC3339）、
+// lastCheckinResult（结果消息）与 lastCheckinOK（是否成功，含「已签到」视为成功），
+// 携带余额时同步 creditsRemain，并刷新内存池（SetCredits + 按余额解冻）。
+// 自动签到观察者与手动签到共用此口径。lastCheckinOK 供前端稳定判定成败，
+// 避免仅靠 lastCheckinResult 文本猜测（如「已签到」误判失败）。
 func (s *CnUpstreamService) PersistCheckinResult(platform string, r scheduler.CheckinResult) {
 	rt, ok := s.platforms[platform]
 	if !ok {
@@ -388,6 +390,7 @@ func (s *CnUpstreamService) PersistCheckinResult(platform string, r scheduler.Ch
 	creds := copyCredentials(acct.Credentials)
 	creds["lastCheckinAt"] = time.Now().Format(time.RFC3339)
 	creds["lastCheckinResult"] = r.Msg
+	creds["lastCheckinOK"] = r.OK
 	if r.HasRemain {
 		creds["creditsRemain"] = r.Remain
 	}
@@ -432,29 +435,39 @@ func (s *CnUpstreamService) ResourceDetail(ctx context.Context, accountID int64)
 	return &CnCreditsDetail{CreditsRemain: remain, Items: items}, nil
 }
 
-// CheckinNow 单账号立即签到：签到成功后刷新余额并按余额解冻账号
-// （语义对齐原 workbuddy-wild scheduler.checkinOne）。
-// 业务失败（如「今日已签到」「无签到活动」）返回 Success=false + Message，不返回 error。
-// 结果统一经 PersistCheckinResult 落库（lastCheckin 状态 + 余额），与自动签到口径一致。
+// CheckinNow 单账号立即签到（语义对齐原 workbuddy-wild scheduler.checkinOne）：
+//   - 签到成功 → Success=true, Message="ok"，刷新余额；
+//   - 上游返回「今日已签到」→ 视为成功，Message="已签到"，同样刷新余额；
+//   - 其余业务失败（如 token 无效、无签到活动）→ Success=false + Message，不返回 error。
+//
+// 结果统一经 PersistCheckinResult 落库（lastCheckin 状态 + lastCheckinOK + 余额），
+// 与自动签到同口径。
 func (s *CnUpstreamService) CheckinNow(ctx context.Context, accountID int64) (*CnCheckinResult, error) {
 	rt, acct, a, err := s.loadCnAccount(ctx, accountID)
 	if err != nil {
 		return nil, err
 	}
-	if err := rt.upstream.DailyCheckin(a); err != nil {
-		rt.pool.RecordCheckin(a.UID, false, err.Error())
-		s.PersistCheckinResult(acct.Platform, scheduler.CheckinResult{UID: a.UID, Msg: err.Error()})
-		return &CnCheckinResult{Success: false, Message: err.Error()}, nil
+	msg := "ok"
+	err = rt.upstream.DailyCheckin(a)
+	if err != nil && !scheduler.IsAlready(err) {
+		short := err.Error()
+		rt.pool.RecordCheckin(a.UID, false, short)
+		s.PersistCheckinResult(acct.Platform, scheduler.CheckinResult{UID: a.UID, OK: false, Msg: short})
+		return &CnCheckinResult{Success: false, Message: short}, nil
 	}
-	rt.pool.RecordCheckin(a.UID, true, "ok")
-	// 签到成功后刷新余额（签到通常发放积分，立即同步池与列表展示）。
+	if err != nil {
+		// 已签到：视为成功状态（对齐 checkinOne）
+		msg = "已签到"
+	}
+	rt.pool.RecordCheckin(a.UID, true, msg)
+	// 签到成功（含已签到）后刷新余额，立即同步池与列表展示。
 	remain := int64(0)
 	hasRemain := false
 	if r, rerr := rt.upstream.UserResource(a); rerr == nil {
 		remain, hasRemain = r, true
 	}
-	s.PersistCheckinResult(acct.Platform, scheduler.CheckinResult{UID: a.UID, OK: true, Msg: "ok", Remain: remain, HasRemain: hasRemain})
-	return &CnCheckinResult{Success: true, Message: "ok", CreditsRemain: remain}, nil
+	s.PersistCheckinResult(acct.Platform, scheduler.CheckinResult{UID: a.UID, OK: true, Msg: msg, Remain: remain, HasRemain: hasRemain})
+	return &CnCheckinResult{Success: true, Message: msg, CreditsRemain: remain}, nil
 }
 
 // FetchUpstreamModels 拉取三渠道账号的上游真实模型列表（供模型映射配置辅助选择）。

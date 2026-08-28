@@ -361,6 +361,10 @@ func isAlready(err error) bool {
 		strings.Contains(s, "code=9095")
 }
 
+// IsAlready 判断上游签到错误是否为「今日已签到」（视为成功状态）。
+// 供 service 层手动签到复用，保持与原自动签到 checkinOne 语义一致。
+func IsAlready(err error) bool { return isAlready(err) }
+
 func shortErr(err error) string {
 	s := strings.TrimSpace(err.Error())
 	if len(s) > 120 {

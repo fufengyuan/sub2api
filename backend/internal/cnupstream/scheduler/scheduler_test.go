@@ -261,6 +261,18 @@ func TestIsAlreadyRequiresExplicitMarker(t *testing.T) {
 	}
 }
 
+// 导出的 IsAlready 与私有 isAlready 语义一致（供 service 层复用）。
+func TestIsAlreadyExported(t *testing.T) {
+	if IsAlready(errors.New("今天已签到，请明天再来")) {
+		// 期望 true
+	} else {
+		t.Fatal("中文「已签到」应命中 IsAlready")
+	}
+	if IsAlready(errors.New("internal server error")) {
+		t.Fatal("普通失败不应命中 IsAlready")
+	}
+}
+
 func TestCheckinObserverReceivesFailure(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "upstream down", http.StatusBadGateway)

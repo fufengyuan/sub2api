@@ -164,20 +164,6 @@ func TestCnUpstreamCheckinNow_Success(t *testing.T) {
 	}
 }
 
-func TestCnUpstreamCheckinNow_AlreadyCheckedIn(t *testing.T) {
-	repo := &fakeCnRepo{accounts: map[int64]*Account{10: cnTestAccount(10, PlatformTraeWork)}}
-	up := &fakeCnUpstream{checkinErr: errors.New("今日已签到")}
-	svc := newCnUpstreamTestSvc(repo, up)
-
-	result, err := svc.CheckinNow(context.Background(), 10)
-	if err != nil {
-		t.Fatalf("business failure must not return error: %v", err)
-	}
-	if result.Success || result.Message != "今日已签到" {
-		t.Fatalf("result = %+v, want success=false message=今日已签到", result)
-	}
-}
-
 func TestCnUpstreamCheckinNow_QoderNoActivity(t *testing.T) {
 	repo := &fakeCnRepo{accounts: map[int64]*Account{11: cnTestAccount(11, PlatformQoder)}}
 	up := &fakeCnUpstream{checkinErr: errors.New("qoder 无签到活动")}
@@ -276,6 +262,9 @@ func TestCnUpstreamPersistCheckinResult(t *testing.T) {
 	if res, _ := creds["lastCheckinResult"].(string); res != "ok" {
 		t.Fatalf("lastCheckinResult = %v, want ok", creds["lastCheckinResult"])
 	}
+	if okv, _ := creds["lastCheckinOK"].(bool); !okv {
+		t.Fatalf("lastCheckinOK = %v, want true", creds["lastCheckinOK"])
+	}
 	st, ok := svc.PlatformPool(PlatformTraeWork).Status("15")
 	if !ok || st.Credits != 888 {
 		t.Fatalf("pool credits = %+v, want 888", st)
@@ -299,6 +288,9 @@ func TestCnUpstreamPersistCheckinResult_Failure(t *testing.T) {
 	creds := repo.updated[0].Credentials
 	if res, _ := creds["lastCheckinResult"].(string); res != "session expired" {
 		t.Fatalf("lastCheckinResult = %v, want failure msg", creds["lastCheckinResult"])
+	}
+	if okv, _ := creds["lastCheckinOK"].(bool); okv {
+		t.Fatalf("lastCheckinOK = %v, want false", creds["lastCheckinOK"])
 	}
 	if _, exists := creds["creditsRemain"]; exists {
 		t.Fatalf("creditsRemain should not be touched on failure without remain: %v", creds)
@@ -324,14 +316,18 @@ func TestCnUpstreamPersistCheckinResult_UnknownUID(t *testing.T) {
 	}
 }
 
-// 手动签到 CheckinNow 同样写 lastCheckin 状态（与自动签到口径一致）。
+// 手动签到 CheckinNow 成功：写 lastCheckin 状态（与自动签到口径一致）。
 func TestCnUpstreamCheckinNow_WritesLastCheckin(t *testing.T) {
 	repo := &fakeCnRepo{accounts: map[int64]*Account{18: cnTestAccount(18, PlatformWorkBuddy)}}
 	up := &fakeCnUpstream{remain: 555}
 	svc := newCnUpstreamTestSvc(repo, up)
 
-	if _, err := svc.CheckinNow(context.Background(), 18); err != nil {
+	res, err := svc.CheckinNow(context.Background(), 18)
+	if err != nil {
 		t.Fatalf("CheckinNow: %v", err)
+	}
+	if !res.Success || res.Message != "ok" {
+		t.Fatalf("result = %+v, want Success=true/message=ok", res)
 	}
 	if len(repo.updated) != 1 {
 		t.Fatalf("expected 1 update, got %d", len(repo.updated))
@@ -343,22 +339,60 @@ func TestCnUpstreamCheckinNow_WritesLastCheckin(t *testing.T) {
 	if res, _ := creds["lastCheckinResult"].(string); res != "ok" {
 		t.Fatalf("lastCheckinResult = %v, want ok", creds["lastCheckinResult"])
 	}
+	if okv, _ := creds["lastCheckinOK"].(bool); !okv {
+		t.Fatalf("lastCheckinOK = %v, want true", creds["lastCheckinOK"])
+	}
 }
 
-// 手动签到业务失败（已签到）也记录状态。
-func TestCnUpstreamCheckinNow_AlreadyCheckedIn_WritesLastCheckin(t *testing.T) {
+// 手动签到遇「已签到」：对齐原版 checkinOne 视为成功（Success=true/已签到），
+// 并落 lastCheckinOK=true，避免前端误判失败。
+func TestCnUpstreamCheckinNow_AlreadyCheckedIn_IsSuccess(t *testing.T) {
 	repo := &fakeCnRepo{accounts: map[int64]*Account{19: cnTestAccount(19, PlatformTraeWork)}}
-	up := &fakeCnUpstream{checkinErr: errors.New("今日已签到")}
+	up := &fakeCnUpstream{checkinErr: errors.New("今日已签到"), remain: 999}
 	svc := newCnUpstreamTestSvc(repo, up)
 
-	if _, err := svc.CheckinNow(context.Background(), 19); err != nil {
+	res, err := svc.CheckinNow(context.Background(), 19)
+	if err != nil {
 		t.Fatalf("CheckinNow: %v", err)
 	}
-	if len(repo.updated) != 1 {
-		t.Fatalf("expected 1 update (lastCheckin), got %d", len(repo.updated))
+	if !res.Success {
+		t.Fatalf("已签到应视为成功，got %+v", res)
 	}
-	res, _ := repo.updated[0].Credentials["lastCheckinResult"].(string)
-	if res != "今日已签到" {
-		t.Fatalf("lastCheckinResult = %v, want 今日已签到", res)
+	if res.Message != "已签到" {
+		t.Fatalf("message = %q, want 已签到", res.Message)
+	}
+	if res.CreditsRemain != 999 {
+		t.Fatalf("CreditsRemain = %d, want 999", res.CreditsRemain)
+	}
+	if len(repo.updated) != 1 {
+		t.Fatalf("expected 1 update, got %d", len(repo.updated))
+	}
+	creds := repo.updated[0].Credentials
+	if res2, _ := creds["lastCheckinResult"].(string); res2 != "已签到" {
+		t.Fatalf("lastCheckinResult = %v, want 已签到", creds["lastCheckinResult"])
+	}
+	if okv, _ := creds["lastCheckinOK"].(bool); !okv {
+		t.Fatalf("lastCheckinOK = %v, want true (已签到视为成功)", creds["lastCheckinOK"])
+	}
+}
+
+// 手动签到真实失败（非已签到）：Success=false 且落 lastCheckinOK=false。
+func TestCnUpstreamCheckinNow_Failure_IsNotSuccess(t *testing.T) {
+	repo := &fakeCnRepo{accounts: map[int64]*Account{20: cnTestAccount(20, PlatformWorkBuddy)}}
+	up := &fakeCnUpstream{checkinErr: errors.New("login expired")}
+	svc := newCnUpstreamTestSvc(repo, up)
+
+	res, err := svc.CheckinNow(context.Background(), 20)
+	if err != nil {
+		t.Fatalf("CheckinNow: %v", err)
+	}
+	if res.Success {
+		t.Fatalf("真实失败应 Success=false, got %+v", res)
+	}
+	if len(repo.updated) != 1 {
+		t.Fatalf("expected 1 update, got %d", len(repo.updated))
+	}
+	if okv, _ := repo.updated[0].Credentials["lastCheckinOK"].(bool); okv {
+		t.Fatalf("lastCheckinOK = %v, want false", repo.updated[0].Credentials["lastCheckinOK"])
 	}
 }

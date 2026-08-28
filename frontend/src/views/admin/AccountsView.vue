@@ -2434,6 +2434,8 @@ const getLastCheckinAt = (row: any): string => {
   const v = (row?.credentials as Record<string, unknown> | undefined)?.lastCheckinAt
   return typeof v === 'string' ? v : ''
 }
+const getLastCheckinOK = (row: any): boolean | null =>
+  (row?.credentials as Record<string, unknown> | undefined)?.lastCheckinOK === true
 const getLastCheckinResult = (row: any): string => {
   const v = (row?.credentials as Record<string, unknown> | undefined)?.lastCheckinResult
   return typeof v === 'string' ? v : ''
@@ -2444,7 +2446,12 @@ const formatLastCheckinAt = (row: any): string => {
   const p = (n: number) => String(n).padStart(2, '0')
   return `${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`
 }
-const isLastCheckinOk = (row: any): boolean => getLastCheckinResult(row) === 'ok'
+// 优先用后端落库的 lastCheckinOK 判定成败（含「已签到」即成功，避免靠文本猜）；
+// 旧数据无该字段时回退到 lastCheckinResult === 'ok'。
+const isLastCheckinOk = (row: any): boolean =>
+  getLastCheckinOK(row) !== null
+    ? (row.credentials as Record<string, unknown>).lastCheckinOK === true
+    : getLastCheckinResult(row) === 'ok'
 const getLastCheckinTooltip = (row: any): string =>
   isLastCheckinOk(row)
     ? t('admin.accounts.cnCredits.lastCheckinOk')
@@ -2453,7 +2460,8 @@ const applyCheckinState = (a: Account, ok: boolean, message: string) => {
   if (!a.credentials) a.credentials = {}
   const creds = a.credentials as Record<string, unknown>
   creds.lastCheckinAt = new Date().toISOString()
-  creds.lastCheckinResult = ok ? 'ok' : message
+  creds.lastCheckinOK = ok
+  creds.lastCheckinResult = message
 }
 const handleRefreshCredits = async (a: Account) => {
   refreshingCredits.value.add(a.id)
