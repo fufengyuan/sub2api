@@ -32,9 +32,12 @@ func IsCnUpstreamPlatform(platform string) bool {
 }
 
 // forwardCnUpstreamChatCompletions 实现三渠道（workbuddy/traework/qoder）的
-// 最小 Chat 分支：按 account.Platform 直调 CnUpstreamService.ChatStream 挑池内
-// 健康账号，把私有 SSE 转换成 OpenAI 兼容格式回写客户端，并从输出中抽取 usage
+// 最小 Chat 分支：按 composite 候选平台依次直调 CnUpstreamService.ChatStream 挑
+// 池内健康账号，把私有 SSE 转换成 OpenAI 兼容格式回写客户端，并从输出中抽取 usage
 // 按 tokens 计费（上游消耗积分，网关侧以 token 口径入账）。
+//
+// 跨平台 fallback：从 ctx 读取 composite 候选平台列表（account.Platform 优先），
+// 前一平台在未写出任何响应前失败则尝试下一个候选平台，切换后同一请求即命中票足的健康账号。
 func (s *OpenAIGatewayService) forwardCnUpstreamChatCompletions(
 	ctx context.Context,
 	c *gin.Context,
@@ -61,35 +64,80 @@ func (s *OpenAIGatewayService) forwardCnUpstreamChatCompletions(
 		}
 	}
 
-	rc, status, respBody, err := s.cnInvokeChatStream(account.Platform, forwardBody)
+	firstTokenMs := int(time.Since(startTime).Milliseconds())
+	var lastErr error
+	for _, platform := range s.cnFallbackPlatformOrder(ctx, account.Platform) {
+		res, err := s.forwardCnUpstreamSinglePlatform(c, platform, forwardBody, originalModel, billingModel, reqStream, startTime, firstTokenMs)
+		if err == nil {
+			return res, nil
+		}
+		lastErr = err
+		// 已写出响应（至少状态头/首个 chunk）时不可再跨平台 fallback，避免半途切换。
+		if isCnResponseCommitted(c) {
+			break
+		}
+	}
+	if lastErr == nil {
+		lastErr = fmt.Errorf("cnupstream: all candidate platforms unavailable")
+	}
+	return nil, lastErr
+}
+
+// cnFallbackPlatformOrder 构造跨平台 fallback 尝试顺序：account.Platform 优先，
+// 其后按 composite 候选平台顺序追加以漏的国产渠道平台（去重）。
+func (s *OpenAIGatewayService) cnFallbackPlatformOrder(ctx context.Context, primary string) []string {
+	order := []string{primary}
+	seen := map[string]bool{primary: true}
+	for _, cand := range CompositeCandidatesFromContext(ctx) {
+		p := cand.Platform
+		if p == "" || seen[p] || !isCnUpstreamPlatform(p) {
+			continue
+		}
+		seen[p] = true
+		order = append(order, p)
+	}
+	return order
+}
+
+// forwardCnUpstreamSinglePlatform 对单个平台执行 ChatStream→SSE→usage→response 的
+// 完整转发；返回错误且尚未提交响应时，由上层切换到下一个候选平台。
+func (s *OpenAIGatewayService) forwardCnUpstreamSinglePlatform(
+	c *gin.Context,
+	platform string,
+	forwardBody []byte,
+	originalModel, billingModel string,
+	reqStream bool,
+	startTime time.Time,
+	firstTokenMs int,
+) (*OpenAIForwardResult, error) {
+	if s.cnUpstream == nil {
+		return nil, fmt.Errorf("cnupstream: service not wired")
+	}
+	rc, status, respBody, err := s.cnInvokeChatStream(platform, forwardBody)
 	if err != nil {
-		// 传输层失败 / 无健康账号：未写出任何响应，交由 handler 统一补 502。
+		// 传输层失败 / 无健康账号：未写出任何响应，交由上层尝试下一个候选平台。
 		return nil, err
 	}
 	if rc != nil {
 		defer func() { _ = rc.Close() }()
 	}
 	if status >= 400 {
-		// 上游 4xx/5xx：三种渠道上层已把失败账号冷却/禁用并轮换，走到这里说明
-		// 全部账号不可用。直接落可读错误，handler 会补写统一失败响应。
+		// 上游 4xx/5xx：渠道上层已把失败账号冷却/禁用并轮换，走到这里说明该平台
+		// 全部账号不可用。落可读错误交由上层尝试下一个候选平台。
 		msg := strings.TrimSpace(string(respBody))
 		if msg == "" {
-			msg = fmt.Sprintf("cnupstream upstream %s http %d", account.Platform, status)
+			msg = fmt.Sprintf("cnupstream upstream %s http %d", platform, status)
 		} else if len(msg) > 512 {
 			msg = msg[:512]
 		}
-		return nil, fmt.Errorf("cnupstream: %s upstream error (http %d): %s", account.Platform, status, msg)
+		return nil, fmt.Errorf("cnupstream: %s upstream error (http %d): %s", platform, status, msg)
 	}
 
-	if s.cnUpstream == nil {
-		return nil, fmt.Errorf("cnupstream: service not wired")
-	}
-	upstream := s.cnUpstream.PlatformUpstream(account.Platform)
+	upstream := s.cnUpstream.PlatformUpstream(platform)
 	if upstream == nil {
-		return nil, fmt.Errorf("cnupstream: no upstream for %s", account.Platform)
+		return nil, fmt.Errorf("cnupstream: no upstream for %s", platform)
 	}
 
-	firstTokenMs := int(time.Since(startTime).Milliseconds())
 	var usage OpenAIUsage
 	buildResult := func() *OpenAIForwardResult {
 		return &OpenAIForwardResult{

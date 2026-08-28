@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -177,5 +178,77 @@ func TestForwardCnUpstreamChatCompletionsNotWired(t *testing.T) {
 		[]byte(`{"model":"glm-5.2","stream":true,"messages":[]}`))
 	if err == nil || !strings.Contains(err.Error(), "not wired") {
 		t.Fatalf("err=%v", err)
+	}
+}
+
+// TestForwardCnUpstreamCrossPlatformFallback 验证 composite 组下，主平台池内全部失败时
+// 会按候选平台顺序切到下一个国产渠道平台（同一请求跨平台 fallback）。
+func TestForwardCnUpstreamCrossPlatformFallback(t *testing.T) {
+	svc := newCnGatewaySvc(func(platform string, _ []byte) (io.ReadCloser, int, []byte, error) {
+		if platform == PlatformTraeWork {
+			// 主平台全部账号不可用
+			return nil, 0, nil, errors.New("fake: all traework accounts unavailable")
+		}
+		if platform == PlatformWorkBuddy {
+			// 候选平台票足、健康，返回正常 SSE
+			return io.NopCloser(strings.NewReader(cnUpstreamSSEFixture)), 200, nil, nil
+		}
+		t.Fatalf("unexpected platform=%q", platform)
+		return nil, 0, nil, errors.New("unexpected platform")
+	})
+
+	// primary 为 traework（失败），composite 候选把 workbuddy 作为后备。
+	ctx := WithCompositeCandidates(context.Background(), []CompositeRouteCandidate{
+		{Platform: PlatformTraeWork},
+		{Platform: PlatformWorkBuddy},
+	})
+
+	gin.SetMode(gin.TestMode)
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest("POST", "/v1/chat/completions", nil)
+
+	res, err := svc.forwardCnUpstreamChatCompletions(ctx, c, &Account{Platform: PlatformTraeWork},
+		[]byte(`{"model":"glm-5.2","stream":true,"messages":[]}`))
+	if err != nil {
+		t.Fatalf("forward should fallback to workbuddy, got err: %v", err)
+	}
+	if res == nil {
+		t.Fatal("expected non-nil result")
+	}
+	// 从候选 workbuddy 成功返回 usage 应被抽取计费。
+	if res.Usage.InputTokens != 12 || res.Usage.OutputTokens != 8 {
+		t.Errorf("usage=%+v", res.Usage)
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, "你好") {
+		t.Errorf("stream output missing fallback content: %q", body)
+	}
+}
+
+// TestForwardCnUpstreamFallbackAllPlatformsUnavailable 验证所有候选平台都失败时返回错误。
+func TestForwardCnUpstreamFallbackAllPlatformsUnavailable(t *testing.T) {
+	svc := newCnGatewaySvc(func(platform string, _ []byte) (io.ReadCloser, int, []byte, error) {
+		return nil, 0, nil, fmt.Errorf("fake: all %s accounts unavailable", platform)
+	})
+
+	ctx := WithCompositeCandidates(context.Background(), []CompositeRouteCandidate{
+		{Platform: PlatformTraeWork},
+		{Platform: PlatformWorkBuddy},
+		{Platform: PlatformQoder},
+	})
+
+	gin.SetMode(gin.TestMode)
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest("POST", "/v1/chat/completions", nil)
+
+	_, err := svc.forwardCnUpstreamChatCompletions(ctx, c, &Account{Platform: PlatformTraeWork},
+		[]byte(`{"model":"glm-5.2","stream":true,"messages":[]}`))
+	if err == nil {
+		t.Fatal("expected error when all candidate platforms unavailable")
+	}
+	if !strings.Contains(err.Error(), "unavailable") {
+		t.Errorf("err should reference unavailability, got: %v", err)
 	}
 }
