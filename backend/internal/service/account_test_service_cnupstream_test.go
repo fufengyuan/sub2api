@@ -3,12 +3,14 @@
 package service
 
 import (
+	"errors"
 	"io"
 	"strings"
 	"testing"
 
 	"github.com/Wei-Shaw/sub2api/internal/cnupstream/auth"
 	"github.com/Wei-Shaw/sub2api/internal/cnupstream/provider"
+	"github.com/Wei-Shaw/sub2api/internal/cnupstream/traework"
 	"github.com/stretchr/testify/require"
 	"github.com/tidwall/gjson"
 )
@@ -144,4 +146,79 @@ func TestAccountTestService_CnUpstreamRequiresModel(t *testing.T) {
 
 func gjsonModel(body []byte) string {
 	return gjson.GetBytes(body, "model").String()
+}
+
+// quotaErrorCnUpstream Aggregate 返回 SOLOStreamError（如 traework 4008 配额超限）。
+type quotaErrorCnUpstream struct {
+	*fakeCnUpstream
+}
+
+func (q *quotaErrorCnUpstream) ChatStream(a *auth.Auth, body []byte) (io.ReadCloser, int, []byte, error) {
+	return io.NopCloser(strings.NewReader("")), 200, nil, nil
+}
+
+func (q *quotaErrorCnUpstream) Aggregate(io.Reader) (map[string]any, error) {
+	return nil, &traework.SOLOStreamError{Code: 4008, Msg: "Your requests have exceeded the quota"}
+}
+
+// 回归：traework 配额超限（SOLOStreamError 4008）不应被误报为「模型名不对」，
+// 应直接透传上游业务错误，避免误导用户去核对本已正确的模型名。
+func TestAccountTestService_CnUpstreamQuotaErrorNotMisreportedAsModelName(t *testing.T) {
+	account := cnUpstreamOAuthTestAccount(404, PlatformTraeWork)
+	repo := &openAIAccountTestRepo{
+		mockAccountRepoForGemini: mockAccountRepoForGemini{
+			accountsByID: map[int64]*Account{account.ID: account},
+		},
+	}
+	up := &quotaErrorCnUpstream{fakeCnUpstream: &fakeCnUpstream{}}
+	restore := withCnTestUpstream(PlatformTraeWork, up)
+	defer restore()
+
+	svc := &AccountTestService{accountRepo: repo}
+	c, recorder := newTestContext()
+
+	err := svc.TestAccountConnection(c, account.ID, "deepseek-v4-flash", "Hi", AccountTestModeDefault)
+
+	require.Error(t, err)
+	body := recorder.Body.String()
+	require.Contains(t, body, `"type":"error"`)
+	// 透传上游业务错误（4008 配额超限），不得出现「上游拒绝了模型」误导文案。
+	require.Contains(t, body, "solo error code=4008")
+	require.Contains(t, body, "exceeded the quota")
+	require.NotContains(t, body, "上游拒绝了模型")
+	require.NotContains(t, body, "请核对账号编辑弹窗")
+}
+
+// plainErrorCnUpstream Aggregate 返回普通错误（非 SOLOStreamError），应保留模型名核对提示。
+type plainErrorCnUpstream struct {
+	*fakeCnUpstream
+}
+
+func (p *plainErrorCnUpstream) ChatStream(a *auth.Auth, body []byte) (io.ReadCloser, int, []byte, error) {
+	return io.NopCloser(strings.NewReader("")), 200, nil, nil
+}
+
+func (p *plainErrorCnUpstream) Aggregate(io.Reader) (map[string]any, error) {
+	return nil, errors.New("model not found")
+}
+
+func TestAccountTestService_CnUpstreamPlainErrorKeepsModelNameHint(t *testing.T) {
+	account := cnUpstreamOAuthTestAccount(405, PlatformTraeWork)
+	repo := &openAIAccountTestRepo{
+		mockAccountRepoForGemini: mockAccountRepoForGemini{
+			accountsByID: map[int64]*Account{account.ID: account},
+		},
+	}
+	up := &plainErrorCnUpstream{fakeCnUpstream: &fakeCnUpstream{}}
+	restore := withCnTestUpstream(PlatformTraeWork, up)
+	defer restore()
+
+	svc := &AccountTestService{accountRepo: repo}
+	c, recorder := newTestContext()
+
+	_ = svc.TestAccountConnection(c, account.ID, "some-model", "Hi", AccountTestModeDefault)
+
+	body := recorder.Body.String()
+	require.Contains(t, body, "上游拒绝了模型")
+	require.Contains(t, body, "请核对账号编辑弹窗")
 }

@@ -406,6 +406,13 @@ func (s *AccountTestService) testCnUpstreamAccountConnection(c *gin.Context, acc
 
 	agg, err := up.Aggregate(rc)
 	if err != nil {
+		// 区分业务错误与模型名错误：SOLO 上游在 SSE 流内返回 event:error
+		//（如 1005 权益 / 4008 配额超限），其与模型名无关，直接透传即可；
+		// 其余聚合错误才可能是 model 不被识别，附模型名提示核对。
+		var se *traework.SOLOStreamError
+		if errors.As(err, &se) {
+			return s.sendErrorAndEnd(c, fmt.Sprintf("%s 上游业务错误: %v", account.Platform, err))
+		}
 		// SOLO config_name 区分大小写：附上实际发送的模型名，提示与「拉取上游模型」核对。
 		return s.sendErrorAndEnd(c, fmt.Sprintf("%s 上游拒绝了模型 %q: %v（请核对账号编辑弹窗「拉取上游模型」返回的准确模型名，含大小写）", account.Platform, upstreamModel, err))
 	}
