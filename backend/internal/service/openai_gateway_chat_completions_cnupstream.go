@@ -18,6 +18,12 @@ import (
 // cnUpstreamPlatforms 三渠道平台标识。命中时网关 Chat Completions 直调
 // CnUpstreamService 的分池账号，而非走标准 OpenAI 上游。
 func isCnUpstreamPlatform(platform string) bool {
+	return IsCnUpstreamPlatform(platform)
+}
+
+// IsCnUpstreamPlatform 判断平台是否为国产多渠道（workbuddy/traework/qoder）。
+// 供 handler 在旧版 GatewayService 转发前分流到支持 cn 的 OpenAIGatewayService。
+func IsCnUpstreamPlatform(platform string) bool {
 	switch platform {
 	case PlatformWorkBuddy, PlatformTraeWork, PlatformQoder:
 		return true

@@ -13,6 +13,45 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
+// OpenAIForwardResultToForwardResult 正确映射 token 与计费模型（供 GatewayHandler 复用旧计费链路）。
+func TestOpenAIForwardResultToForwardResult(t *testing.T) {
+	firstTokenMs := 123
+	or := &OpenAIForwardResult{
+		RequestID:    "req-1",
+		Model:        "glm-5.3",
+		BillingModel: "deepseek-v4-flash",
+		UpstreamModel: "glm-5.3",
+		Usage: OpenAIUsage{InputTokens: 12, OutputTokens: 8, CacheReadInputTokens: 3},
+		Stream:       true,
+		FirstTokenMs: &firstTokenMs,
+	}
+	fr := OpenAIForwardResultToForwardResult(or)
+	if fr == nil {
+		t.Fatal("expected non-nil ForwardResult")
+	}
+	if fr.Model != "glm-5.3" {
+		t.Fatalf("Model = %v, want glm-5.3", fr.Model)
+	}
+	if fr.UpstreamModel != "deepseek-v4-flash" {
+		t.Fatalf("UpstreamModel = %v, want BillingModel (计费模型)", fr.UpstreamModel)
+	}
+	if fr.Usage.InputTokens != 12 || fr.Usage.OutputTokens != 8 || fr.Usage.CacheReadInputTokens != 3 {
+		t.Fatalf("Usage = %+v", fr.Usage)
+	}
+	if !fr.Stream || fr.FirstTokenMs == nil || *fr.FirstTokenMs != 123 {
+		t.Fatalf("Stream/FirstTokenMs = %v/%v", fr.Stream, fr.FirstTokenMs)
+	}
+	if OpenAIForwardResultToForwardResult(nil) != nil {
+		t.Fatal("nil 输入应返回 nil")
+	}
+	// BillingModel 为空时回退 UpstreamModel。
+	or.BillingModel = ""
+	fr2 := OpenAIForwardResultToForwardResult(or)
+	if fr2.UpstreamModel != "glm-5.3" {
+		t.Fatalf("UpstreamModel = %v, want glm-5.3 (回退)", fr2.UpstreamModel)
+	}
+}
+
 // cnUpstreamSSEFixture 三渠道上游返回的 OpenAI 形 SSE（含 usage 与 finish_reason）。
 const cnUpstreamSSEFixture string = "data: {\"id\":\"chatcmpl-cn1\",\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.2\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":\"你好\"}}]}\n\n" +
 	"data: {\"id\":\"chatcmpl-cn1\",\"object\":\"chat.completion.chunk\",\"model\":\"glm-5.2\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"，世界\"},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":12,\"completion_tokens\":8,\"total_tokens\":20}}\n\n" +

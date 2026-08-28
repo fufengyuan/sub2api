@@ -264,7 +264,20 @@ func (h *GatewayHandler) ChatCompletions(c *gin.Context) {
 		}
 		var result *service.ForwardResult
 		setActualUpstreamEndpoint(c, "")
-		if account.Platform == service.PlatformGemini {
+		if service.IsCnUpstreamPlatform(account.Platform) {
+			// 国产多渠道（workbuddy/traework/qoder）：OpenAIGatewayService 已有 cn 分支
+			// 直调 CnUpstreamService 分池账号并转 OpenAI 兼容流计费；GatewayService 无此支持。
+			if h.openAIGatewayService == nil {
+				h.chatCompletionsErrorResponse(c, http.StatusBadGateway, "upstream_error", "CN upstream gateway service is not configured")
+				if accountReleaseFunc != nil {
+					accountReleaseFunc()
+				}
+				return
+			}
+			var cnResult *service.OpenAIForwardResult
+			cnResult, err = h.openAIGatewayService.ForwardAsChatCompletions(c.Request.Context(), c, account, forwardBody, "", channelMapping.MappedModel)
+			result = service.OpenAIForwardResultToForwardResult(cnResult)
+		} else if account.Platform == service.PlatformGemini {
 			if h.geminiCompatService == nil {
 				h.chatCompletionsErrorResponse(c, http.StatusBadGateway, "upstream_error", "Gemini compatibility service is not configured")
 				if accountReleaseFunc != nil {

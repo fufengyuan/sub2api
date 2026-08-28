@@ -289,6 +289,49 @@ type OpenAIForwardResult struct {
 	wsAccountFailoverReplayInput []json.RawMessage
 }
 
+// OpenAIForwardResultToForwardResult 把 OpenAI 网关转发结果转换为旧版
+// ForwardResult，供 GatewayHandler 在三渠道（chat/completions）分流到
+// OpenAIGatewayService 后，复用原有的 RecordUsageInput 计费链路。
+// Usage 仅保留旧计费体系所需 token 字段；计费模型取 BillingModel（若有），否则用 UpstreamModel。
+func OpenAIForwardResultToForwardResult(r *OpenAIForwardResult) *ForwardResult {
+	if r == nil {
+		return nil
+	}
+	upstreamModel := r.UpstreamModel
+	if r.BillingModel != "" {
+		upstreamModel = r.BillingModel
+	}
+	return &ForwardResult{
+		RequestID:                     r.RequestID,
+		Usage: ClaudeUsage{
+			InputTokens:              r.Usage.InputTokens,
+			OutputTokens:             r.Usage.OutputTokens,
+			CacheCreationInputTokens: r.Usage.CacheCreationInputTokens,
+			CacheReadInputTokens:     r.Usage.CacheReadInputTokens,
+			ImageOutputTokens:        r.Usage.ImageOutputTokens,
+		},
+		Model:                         r.Model,
+		UpstreamModel:                 upstreamModel,
+		UpstreamResponseModel:         r.UpstreamResponseModel,
+		UpstreamResponseModelConflict: r.UpstreamResponseModelConflict,
+		Stream:                        r.Stream,
+		Duration:                      r.Duration,
+		FirstTokenMs:                  r.FirstTokenMs,
+		ClientDisconnect:              r.ClientDisconnect,
+		ReasoningEffort:               r.ReasoningEffort,
+		ServiceTier:                   r.ServiceTier,
+		ImageCount:                    r.ImageCount,
+		ImageSize:                     r.ImageSize,
+		ImageInputSize:                r.ImageInputSize,
+		ImageOutputSize:               r.ImageOutputSize,
+		ImageOutputSizes:              r.ImageOutputSizes,
+		ImageSizeSource:               r.ImageSizeSource,
+		ImageSizeBreakdown:            r.ImageSizeBreakdown,
+		SearchCount:                   r.SearchCount,
+		AudioUsage:                    r.AudioUsage,
+	}
+}
+
 // SucceededForScheduling reports whether this result is an upstream success
 // that may clear model-scoped transient state. The zero value remains a success
 // for existing non-WS callers.
