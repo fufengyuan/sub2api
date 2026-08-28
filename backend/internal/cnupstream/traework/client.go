@@ -57,9 +57,10 @@ type Client struct {
 }
 
 func New() *Client {
-	// sub2api 适配：使用 uTLS 模拟 Chrome TLS 指纹（transport.go），
-	// 并按 host 分派 HTTP/2(ug) 与 HTTP/1.1(chat) 传输。
-	tr := newUTLSTransport()
+	// 对齐真原版（workbuddy-wild）traework：使用标准 HTTP transport，不引入
+	// uTLS/强制 HTTP/1.1。上游对连接特征的判定据此与官方客户端保持一致，
+	// 避免因 TLS 指纹/协议协商差异触发 4008 quota 风控。
+	tr := &http.Transport{MaxIdleConns: 100, MaxIdleConnsPerHost: 20, IdleConnTimeout: 90 * time.Second, ResponseHeaderTimeout: 120 * time.Second}
 	return &Client{HTTP: &http.Client{Timeout: 120 * time.Second, Transport: tr}, StreamHTTP: &http.Client{Transport: tr}, AgentHost: AgentHost, UgHost: UgHost, OAuthHost: OAuthHost, ClientID: ClientID, CheckinRetryDelay: 8 * time.Second}
 }
 
