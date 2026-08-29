@@ -767,7 +767,7 @@ const loadAvailableModels = async () => {
   selectedModelId.value = '' // Reset selection before loading
   try {
     const account = props.account
-    const isCnUpstream = account.platform === 'workbuddy' || account.platform === 'traework' || account.platform === 'qoder'
+    const isCnUpstream = account.platform === 'workbuddy' || account.platform === 'traework' || account.platform === 'qoder' || account.platform === 'qwenwork'
     if (isCnUpstream) {
       // 三渠道：配置了模型映射时显示映射后的对外模型（测试请求经网关 GetMappedModel
       // 命中映射）；未配置映射时回退上游真实模型。

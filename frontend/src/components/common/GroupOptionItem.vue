@@ -138,6 +138,8 @@ const ratePillClass = computed(() => {
       return 'bg-sky-50 text-sky-700 dark:bg-sky-900/20 dark:text-sky-400'
     case 'qoder':
       return 'bg-amber-50 text-amber-700 dark:bg-amber-900/20 dark:text-amber-400'
+    case 'qwenwork':
+      return 'bg-fuchsia-50 text-fuchsia-700 dark:bg-fuchsia-900/20 dark:text-fuchsia-400'
     default: // antigravity and others
       return 'bg-violet-50 text-violet-700 dark:bg-violet-900/20 dark:text-violet-400'
   }

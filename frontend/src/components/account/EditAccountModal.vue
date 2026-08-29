@@ -3101,6 +3101,7 @@ const editApiKey = ref('')
 const DOMESTIC_OAUTH_FIELD_LIST: Array<{ key: string; labelKey: string }> = [
   { key: 'accessToken', labelKey: 'accessToken' },
   { key: 'refreshToken', labelKey: 'refreshToken' },
+  { key: 'expiresAt', labelKey: 'expiresAt' },
   { key: 'machineId', labelKey: 'machineId' },
   { key: 'deviceId', labelKey: 'deviceId' },
   { key: 'domain', labelKey: 'domain' },
@@ -3115,7 +3116,8 @@ const isDomesticOAuthAccount = computed(() =>
   props.account?.type === 'oauth' &&
   (props.account.platform === 'workbuddy' ||
     props.account.platform === 'traework' ||
-    props.account.platform === 'qoder')
+    props.account.platform === 'qoder' ||
+    props.account.platform === 'qwenwork')
 )
 const editDomesticOAuth = reactive<Record<string, string>>(
   Object.fromEntries(DOMESTIC_OAUTH_FIELD_LIST.map(({ key }) => [key, ''])) as Record<string, string>
@@ -4221,7 +4223,7 @@ const syncFormFromAccount = (newAccount: Account | null) => {
 
     // Load model mappings for service_account
     loadModelRestrictionFromMapping(credentials.model_mapping as Record<string, unknown> | undefined)
-  } else if (newAccount.type === 'oauth' && (newAccount.platform === 'workbuddy' || newAccount.platform === 'traework' || newAccount.platform === 'qoder') && newAccount.credentials) {
+  } else if (newAccount.type === 'oauth' && (newAccount.platform === 'workbuddy' || newAccount.platform === 'traework' || newAccount.platform === 'qoder' || newAccount.platform === 'qwenwork') && newAccount.credentials) {
     const credentials = newAccount.credentials as Record<string, unknown>
     for (const { key } of DOMESTIC_OAUTH_FIELD_LIST) {
       editDomesticOAuth[key] = typeof credentials[key] === 'string' ? (credentials[key] as string) : ''

@@ -1226,6 +1226,7 @@ function generateRoutedCodexFiles(
     workbuddy: 'WorkBuddy',
     traework: 'TraeWork',
     qoder: 'Qoder',
+    qwenwork: 'QwenWork',
     composite: 'Composite'
   }
   const label = labels[platform]

@@ -96,6 +96,7 @@ const platformLabel = computed(() => {
   if (props.platform === 'workbuddy') return 'WorkBuddy'
   if (props.platform === 'traework') return 'TraeWork'
   if (props.platform === 'qoder') return 'Qoder'
+  if (props.platform === 'qwenwork') return 'QwenWork'
   return 'Gemini'
 })
 
@@ -212,6 +213,9 @@ const platformClass = computed(() => {
   if (props.platform === 'qoder') {
     return 'bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400'
   }
+  if (props.platform === 'qwenwork') {
+    return 'bg-fuchsia-100 text-fuchsia-700 dark:bg-fuchsia-900/30 dark:text-fuchsia-400'
+  }
   return 'bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400'
 })
 
@@ -245,6 +249,9 @@ const typeClass = computed(() => {
   }
   if (props.platform === 'qoder') {
     return 'bg-amber-100 text-amber-600 dark:bg-amber-900/30 dark:text-amber-400'
+  }
+  if (props.platform === 'qwenwork') {
+    return 'bg-fuchsia-100 text-fuchsia-600 dark:bg-fuchsia-900/30 dark:text-fuchsia-400'
   }
   return 'bg-blue-100 text-blue-600 dark:bg-blue-900/30 dark:text-blue-400'
 })

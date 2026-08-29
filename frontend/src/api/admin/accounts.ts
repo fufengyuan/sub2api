@@ -321,7 +321,7 @@ export async function applyOAuthCredentials(
 
 /**
  * Start a CN upstream (WorkBuddy / TraeWork / Qoder) OAuth authorization flow.
- * @param platform - One of 'workbuddy' | 'traework' | 'qoder'
+ * @param platform - One of 'workbuddy' | 'traework' | 'qoder' | 'qwenwork'
  * @param redirectBase - The redirect base used by the callback (e.g. window.location.origin)
  * @returns Authorize URL and state token used for polling
  */

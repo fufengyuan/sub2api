@@ -244,6 +244,19 @@
             <PlatformIcon platform="qoder" size="sm" />
             {{ t('admin.accounts.domesticTool.platformQoder') }}
           </button>
+          <button
+            type="button"
+            @click="selectDomesticToolPlatform('qwenwork')"
+            :class="[
+              'flex flex-1 items-center justify-center gap-2 rounded-md px-4 py-2.5 text-sm font-medium transition-all',
+              form.platform === 'qwenwork'
+                ? 'bg-white text-fuchsia-600 shadow-sm dark:bg-dark-600 dark:text-fuchsia-400'
+                : 'text-gray-600 hover:text-gray-900 dark:text-gray-400 dark:hover:text-gray-200'
+            ]"
+          >
+            <PlatformIcon platform="qwenwork" size="sm" />
+            {{ t('admin.accounts.domesticTool.platformQwenwork') }}
+          </button>
         </div>
       </div>
 
@@ -306,10 +319,10 @@
 
         <!-- 国内工具 OAuth 凭证表单 -->
         <div v-if="accountCategory === 'oauth-based'" class="mt-4 space-y-4">
-          <!-- 一键授权仅 traework（浏览器回调流）/ workbuddy（服务端轮询流）支持；
+          <!-- 一键授权：traework（浏览器回调流）/ workbuddy / qwenwork（服务端轮询流）支持；
                qoder 原项目无登录实现，仅粘贴 auth JSON。 -->
           <button
-            v-if="form.platform === 'traework' || form.platform === 'workbuddy'"
+            v-if="form.platform === 'traework' || form.platform === 'workbuddy' || form.platform === 'qwenwork'"
             type="button"
             :disabled="domesticOAuthAuthorizing"
             class="inline-flex w-full items-center justify-center gap-2 rounded-lg bg-emerald-600 px-4 py-2.5 text-sm font-medium text-white transition-all hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-60"
@@ -4050,6 +4063,8 @@ const apiKeyBaseUrlPlaceholder = computed(() => {
       return 'https://copilot.tencent.com'
     case 'traework':
       return 'https://trae-api-cn.mchost.guru'
+    case 'qwenwork':
+      return 'https://gateway.qwenwork.cn'
     default:
       return 'https://api.anthropic.com'
   }
@@ -4068,6 +4083,8 @@ const apiKeyValuePlaceholder = computed(() => {
     case 'traework':
       return 'tr_...'
     case 'qoder':
+      return 'sk-...'
+    case 'qwenwork':
       return 'sk-...'
     case 'kimi':
       return 'sk-...'
@@ -4249,13 +4266,17 @@ function selectCNPlatform(platform: 'kimi' | 'zhipu' | 'deepseek') {
   apiKeyBaseUrl.value = defaultCNBaseUrl(platform, accountMode.value, apiProtocol.value)
   resetAdaptiveBaseUrls(platform, accountMode.value)
 }
-// 国内工具平台（WorkBuddy / TraeWork / Qoder）
+// 国内工具平台（WorkBuddy / TraeWork / Qoder / QwenWork）
 const isDomesticToolPlatform = computed(
-  () => form.platform === 'workbuddy' || form.platform === 'traework' || form.platform === 'qoder'
+  () =>
+    form.platform === 'workbuddy' ||
+    form.platform === 'traework' ||
+    form.platform === 'qoder' ||
+    form.platform === 'qwenwork'
 )
 // 切换国内工具平台（WorkBuddy / TraeWork / Qoder）：提供 OAuth / API Key 两种方式。
 // 默认走 OAuth（粘贴凭证或一键授权），不再强制 apikey；无协议选项。
-function selectDomesticToolPlatform(platform: 'workbuddy' | 'traework' | 'qoder') {
+function selectDomesticToolPlatform(platform: 'workbuddy' | 'traework' | 'qoder' | 'qwenwork') {
   form.platform = platform
   accountCategory.value = 'oauth-based'
   apiKeyBaseUrl.value = ''
@@ -4265,6 +4286,7 @@ function selectDomesticToolPlatform(platform: 'workbuddy' | 'traework' | 'qoder'
 const DOMESTIC_OAUTH_FIELDS = [
   { key: 'accessToken', labelKey: 'accessToken' },
   { key: 'refreshToken', labelKey: 'refreshToken' },
+  { key: 'expiresAt', labelKey: 'expiresAt' },
   { key: 'machineId', labelKey: 'machineId' },
   { key: 'deviceId', labelKey: 'deviceId' },
   { key: 'domain', labelKey: 'domain' },

@@ -114,7 +114,7 @@ func (f *fakeCnWorkBuddyLoginClient) PollLogin(state string) (*upstream.LoginRes
 
 func newTestCnOAuthSvc(trae cnTraeWorkLoginClient, wb cnWorkBuddyLoginClient) (*CnOAuthService, *fakeCnAccountCreator) {
 	creator := &fakeCnAccountCreator{}
-	svc := NewCnOAuthService(creator, trae, wb, NewInMemoryOAuthStateStore())
+	svc := NewCnOAuthService(creator, trae, wb, nil, NewInMemoryOAuthStateStore())
 	return svc, creator
 }
 

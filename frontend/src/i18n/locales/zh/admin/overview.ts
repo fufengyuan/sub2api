@@ -892,6 +892,7 @@ export default {
         workbuddy: 'WorkBuddy',
         traework: 'TraeWork',
         qoder: 'Qoder',
+        qwenwork: '千问办公',
         composite: 'Composite',
       },
       saving: '保存中...',

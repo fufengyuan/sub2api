@@ -97,7 +97,8 @@ const PLATFORM_LABELS: Record<string, string> = {
   antigravity: 'Antigravity',
   workbuddy: 'WorkBuddy',
   traework: 'TraeWork',
-  qoder: 'Qoder'
+  qoder: 'Qoder',
+  qwenwork: 'QwenWork'
 }
 
 function platformLabel(platform: string): string {

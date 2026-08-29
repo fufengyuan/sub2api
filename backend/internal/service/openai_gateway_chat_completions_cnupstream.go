@@ -27,11 +27,11 @@ func isCnUpstreamPlatform(platform string) bool {
 	return IsCnUpstreamPlatform(platform)
 }
 
-// IsCnUpstreamPlatform 判断平台是否为国产多渠道（workbuddy/traework/qoder）。
+// IsCnUpstreamPlatform 判断平台是否为国产多渠道（workbuddy/traework/qoder/qwenwork）。
 // 供 handler 在旧版 GatewayService 转发前分流到支持 cn 的 OpenAIGatewayService。
 func IsCnUpstreamPlatform(platform string) bool {
 	switch platform {
-	case PlatformWorkBuddy, PlatformTraeWork, PlatformQoder:
+	case PlatformWorkBuddy, PlatformTraeWork, PlatformQoder, PlatformQwenWork:
 		return true
 	}
 	return false

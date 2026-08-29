@@ -225,7 +225,7 @@ export default {
         credits: 'Credits',
         actions: 'Actions'
       },
-      // CN upstream (WorkBuddy / TraeWork / Qoder) credits & check-in
+      // CN upstream (WorkBuddy / TraeWork / Qoder / QwenWork) credits & check-in
       cnCredits: {
         refreshCredits: 'Refresh Credits',
         refreshSuccess: 'Credits refreshed: {credits}',
@@ -1012,6 +1012,7 @@ export default {
       // CN tool platforms (WorkBuddy / TraeWork / Qoder) OAuth credentials
       domesticTool: {
         platformQoder: 'Qoder',
+        platformQwenwork: 'QwenWork',
         oauthType: 'OAuth',
         apikeyType: 'API Key',
         accountTypeHint: 'Choose how the account is added',
@@ -1031,6 +1032,7 @@ export default {
         oauthLocalOnly: 'TraeWork one-click authorization only works when the console is accessed via 127.0.0.1 (the auth page only calls back to loopback). For remote deployments, access via SSH port forwarding, or add the account by pasting auth JSON',
         accessToken: 'Access Token',
         refreshToken: 'Refresh Token',
+        expiresAt: 'Expires At',
         machineId: 'Machine ID',
         deviceId: 'Device ID',
         domain: 'Domain',

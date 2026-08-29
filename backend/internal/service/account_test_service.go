@@ -26,10 +26,11 @@ import (
 	"sync"
 	"time"
 
-	cnclient "github.com/Wei-Shaw/sub2api/internal/cnupstream/upstream"
-	traework "github.com/Wei-Shaw/sub2api/internal/cnupstream/traework"
-	qoder "github.com/Wei-Shaw/sub2api/internal/cnupstream/qoder"
 	provider "github.com/Wei-Shaw/sub2api/internal/cnupstream/provider"
+	qoder "github.com/Wei-Shaw/sub2api/internal/cnupstream/qoder"
+	qwenwork "github.com/Wei-Shaw/sub2api/internal/cnupstream/qwenwork"
+	traework "github.com/Wei-Shaw/sub2api/internal/cnupstream/traework"
+	cnclient "github.com/Wei-Shaw/sub2api/internal/cnupstream/upstream"
 	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/claude"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/geminicli"
@@ -359,15 +360,16 @@ func (s *AccountTestService) testCNProviderChatCompletionsConnection(c *gin.Cont
 	return s.testOpenAIChatCompletionsConnection(c, account, testModelID, prompt, normalizedBaseURL, authToken)
 }
 
-// cnTestUpstreamBuilders 三渠道（workbuddy/traework/qoder）测试连接的上游
+// cnTestUpstreamBuilders 国产渠道（workbuddy/traework/qoder/qwenwork）测试连接的上游
 // client 构建器：client 无状态、按需构建（与 CnUpstreamService 同构），单测可临时替换注入 fake。
 var cnTestUpstreamBuilders = map[string]func() provider.Upstream{
 	PlatformWorkBuddy: func() provider.Upstream { return cnclient.New() },
 	PlatformTraeWork:  func() provider.Upstream { return traework.New() },
 	PlatformQoder:     func() provider.Upstream { return qoder.New() },
+	PlatformQwenWork:  func() provider.Upstream { return qwenwork.New() },
 }
 
-// testCnUpstreamAccountConnection 三渠道账号直连测试：对外模型经 GetMappedModel
+// testCnUpstreamAccountConnection 国产渠道账号直连测试：对外模型经 GetMappedModel
 // 转为上游真实模型后调 upstream.ChatStream，私有 SSE 聚合为 OpenAI 对象取首条回复。
 func (s *AccountTestService) testCnUpstreamAccountConnection(c *gin.Context, account *Account, modelID string, prompt string) error {
 	builder, ok := cnTestUpstreamBuilders[account.Platform]

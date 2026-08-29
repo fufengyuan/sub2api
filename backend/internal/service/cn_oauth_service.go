@@ -11,12 +11,13 @@ import (
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/cnupstream/auth"
+	"github.com/Wei-Shaw/sub2api/internal/cnupstream/qwenwork"
 	"github.com/Wei-Shaw/sub2api/internal/cnupstream/traework"
 	"github.com/Wei-Shaw/sub2api/internal/cnupstream/upstream"
 	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
 )
 
-// CnOAuthService 三渠道（workbuddy/traework/qoder）的一键 OAuth 授权建号服务。
+// CnOAuthService 国产渠道（workbuddy/traework/qoder/qwenwork）的一键 OAuth 授权建号服务。
 //
 // 平台流程（对齐原 workbuddy-wild 的真实协议，见 docs/oauth-account-add-design.md）：
 //   - traework：浏览器回调流。授权页 www.trae.cn/authorization?auth_type=local，
@@ -24,11 +25,15 @@ import (
 //     后端 RefreshToken 换 accessToken + GetUserInfo 建号。
 //   - workbuddy：服务端轮询流。StartLogin 拿上游 state+授权 URL，浏览器登录后
 //     后端轮询 PollLogin，成功即自动建号（无浏览器回调）。
+//   - qwenwork：服务端轮询流（PKCE Device Flow）。Start 生成 PKCE 状态 +
+//     machine_id 并返回 /device/selectAccounts 授权 URL，浏览器确认后
+//     Status 轮询 /api/v1/deviceToken/poll，成功即自动建号（无浏览器回调）。
 //   - qoder：原项目无登录实现，Start 返回明确错误（仅支持粘贴 auth JSON 建号）。
 type CnOAuthService struct {
 	creator   AdminAccountCreator // 建号器，由 adminServiceImpl 提供
 	traework  cnTraeWorkLoginClient
 	workbuddy cnWorkBuddyLoginClient
+	qwenwork  cnQwenWorkLoginClient
 	store     oauthStateStore // state 一次性占用存储（本地内存实现）
 }
 
@@ -48,6 +53,12 @@ type cnTraeWorkLoginClient interface {
 type cnWorkBuddyLoginClient interface {
 	StartLogin() (state, authURL string, err error)
 	PollLogin(state string) (*upstream.LoginResult, error)
+}
+
+// cnQwenWorkLoginClient 与 qwenwork 包登录函数签名一致的窄接口（测试可注入 stub）。
+type cnQwenWorkLoginClient interface {
+	StartLogin(machineID string) (*qwenwork.LoginState, string, error)
+	PollLogin(st *qwenwork.LoginState) (*qwenwork.LoginResult, error)
 }
 
 // oauthStateStore 是 OAuth state 的存储接口（本地内存实现，便于测试注入替身）。
@@ -73,8 +84,11 @@ type oauthStateEntry struct {
 	CodeVerifier string
 	// UpstreamState 仅 workbuddy：上游 auth/state 签发的登录 state。
 	UpstreamState string
-	ExpiresAt     time.Time
-	Used          bool
+	// QwVerifier/QwNonce 仅 qwenwork：PKCE 设备授权流的状态（轮询换 token 必须配对）。
+	QwVerifier string
+	QwNonce    string
+	ExpiresAt  time.Time
+	Used       bool
 }
 
 // oauthStateStatus 状态机值，供 Status 返回。
@@ -102,11 +116,12 @@ var (
 )
 
 // NewCnOAuthService 构造 CnOAuthService。
-func NewCnOAuthService(creator AdminAccountCreator, trae cnTraeWorkLoginClient, wb cnWorkBuddyLoginClient, store oauthStateStore) *CnOAuthService {
+func NewCnOAuthService(creator AdminAccountCreator, trae cnTraeWorkLoginClient, wb cnWorkBuddyLoginClient, qw cnQwenWorkLoginClient, store oauthStateStore) *CnOAuthService {
 	return &CnOAuthService{
 		creator:   creator,
 		traework:  trae,
 		workbuddy: wb,
+		qwenwork:  qw,
 		store:     store,
 	}
 }
@@ -131,6 +146,27 @@ func (s *CnOAuthService) Start(ctx context.Context, platform, redirectBase strin
 	case PlatformQoder:
 		return "", "", infraerrors.Newf(http.StatusBadRequest, "CN_OAUTH_UNSUPPORTED_PLATFORM",
 			"platform %q 暂不支持 OAuth 授权建号（原项目无 qoder 登录实现，请使用粘贴 auth JSON）", platform)
+	case PlatformQwenWork:
+		if s.qwenwork == nil {
+			return "", "", infraerrors.Newf(http.StatusNotImplemented, "CN_OAUTH_UNSUPPORTED_PLATFORM",
+				"qwenwork oauth login client is not configured")
+		}
+		// machine_id 上游按设备识别，必须与建号时写入 credentials.machineId 的值
+		// 一致（持久化），否则后续 dt 刷新/聊天请求会被风控拒绝。
+		machineID := traework.GenMachineID()
+		loginState, authURL, err := s.qwenwork.StartLogin(machineID)
+		if err != nil {
+			return "", "", infraerrors.Newf(http.StatusBadGateway, "CN_OAUTH_START_FAILED",
+				"qwenwork auth start failed: %v", err)
+		}
+		s.store.Put(state, oauthStateEntry{
+			Platform:   platform,
+			MachineID:  machineID,
+			QwVerifier: loginState.Verifier,
+			QwNonce:    loginState.Nonce,
+			ExpiresAt:  time.Now().Add(cnOAuthStateTTL),
+		})
+		return authURL, state, nil
 	default:
 		return "", "", infraerrors.Newf(http.StatusBadRequest, "CN_OAUTH_UNSUPPORTED_PLATFORM",
 			"unknown OAuth platform %q（可选值: traework, workbuddy）", platform)
@@ -346,6 +382,24 @@ func (s *CnOAuthService) Status(ctx context.Context, state string) (status strin
 	if entry.Used {
 		return oauthStateStatusUsed, entry.Platform
 	}
+	if entry.Platform == PlatformQwenWork && s.qwenwork != nil {
+		res, err := s.qwenwork.PollLogin(&qwenwork.LoginState{Verifier: entry.QwVerifier, Nonce: entry.QwNonce})
+		if err != nil {
+			if err != qwenwork.ErrLoginPending {
+				log.Printf("cn oauth qwenwork poll failed state=%s err=%v", state, err)
+			}
+			return oauthStateStatusPending, entry.Platform
+		}
+		consumed, ok := s.store.Consume(state)
+		if !ok {
+			return oauthStateStatusUsed, entry.Platform
+		}
+		if _, err := s.creator.CreateAccount(ctx, s.qwenWorkCreateInput(consumed, res)); err != nil {
+			log.Printf("cn oauth qwenwork create account failed state=%s err=%v", state, err)
+			return oauthStateStatusPending, entry.Platform
+		}
+		return oauthStateStatusUsed, entry.Platform
+	}
 	if entry.Platform == PlatformWorkBuddy && s.workbuddy != nil {
 		res, err := s.workbuddy.PollLogin(entry.UpstreamState)
 		if err != nil {
@@ -382,6 +436,51 @@ func (s *CnOAuthService) workBuddyCreateInput(entry oauthStateEntry, res *upstre
 		"uid":          res.UID,
 		"nickname":     res.Nickname,
 		"enterpriseId": res.EnterpriseID,
+	}
+	name := strings.TrimSpace(res.Nickname)
+	if name == "" {
+		name = platformAccountName(entry.Platform)
+	}
+	return &CreateAccountInput{
+		Name:        name,
+		Platform:    entry.Platform,
+		Type:        AccountTypeOAuth,
+		Credentials: credentials,
+		Concurrency: 1,
+	}
+}
+
+// qwenWorkCreateInput 由设备授权结果组装建号入参（凭证键与 hydrateAuth 驼峰字段一致）。
+// 机器指纹（machineId/machineToken/machineType）经 EnsureFingerprint 生成并入库，
+// 与聊天请求头的 COSY 签名保持同一设备身份。
+func (s *CnOAuthService) qwenWorkCreateInput(entry oauthStateEntry, res *qwenwork.LoginResult) *CreateAccountInput {
+	expiresAt := int64(0)
+	if res.ExpiresIn > 0 {
+		expiresAt = time.Now().Add(time.Duration(res.ExpiresIn) * time.Second).Unix()
+	}
+	a := &auth.Auth{
+		Kind:         entry.Platform,
+		AccessToken:  res.AccessToken,
+		RefreshToken: res.RefreshToken,
+		ExpiresAt:    expiresAt,
+		Domain:       "qwenwork.cn",
+		ApiHost:      qwenwork.GatewayBase,
+		MachineID:    entry.MachineID,
+		UID:          res.UID,
+		Nickname:     res.Nickname,
+	}
+	qwenwork.EnsureFingerprint(a)
+	credentials := map[string]any{
+		"accessToken":  a.AccessToken,
+		"refreshToken": a.RefreshToken,
+		"expiresAt":    a.ExpiresAt,
+		"domain":       a.Domain,
+		"apiHost":      a.ApiHost,
+		"machineId":    a.MachineID,
+		"machineToken": a.MachineToken,
+		"machineType":  a.MachineType,
+		"uid":          a.UID,
+		"nickname":     a.Nickname,
 	}
 	name := strings.TrimSpace(res.Nickname)
 	if name == "" {

@@ -33,6 +33,7 @@ const (
 	PlatformWorkBuddy = "workbuddy" // CodeBuddy / WorkBuddy
 	PlatformTraeWork  = "traework"  // TraeWork SOLO
 	PlatformQoder     = "qoder"     // Qoder
+	PlatformQwenWork  = "qwenwork"  // 千问办公 QwenWork（协议同源 Qoder，域名/积分接口不同）
 )
 
 // Account mode constants 区分国产供应商的「按量付费（余额）」与「Coding Plan」两种接入方式。

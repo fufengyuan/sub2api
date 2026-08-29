@@ -158,7 +158,9 @@
                                   ? 'bg-sky-100 text-sky-700 dark:bg-sky-900/30 dark:text-sky-400'
                                   : value === 'qoder'
                                     ? 'bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400'
-                                    : 'bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400',
+                                    : value === 'qwenwork'
+                                      ? 'bg-fuchsia-100 text-fuchsia-700 dark:bg-fuchsia-900/30 dark:text-fuchsia-400'
+                                      : 'bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400',
               ]"
             >
               <PlatformIcon :platform="value" size="xs" />
@@ -3990,7 +3992,9 @@
                                       ? 'bg-sky-100 text-sky-700 dark:bg-sky-900/30 dark:text-sky-400'
                                       : group.platform === 'qoder'
                                         ? 'bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400'
-                                        : 'bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400',
+                                        : group.platform === 'qwenwork'
+                                          ? 'bg-fuchsia-100 text-fuchsia-700 dark:bg-fuchsia-900/30 dark:text-fuchsia-400'
+                                          : 'bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400',
                   ]"
                 >
                   {{ t("admin.groups.platforms." + group.platform) }}

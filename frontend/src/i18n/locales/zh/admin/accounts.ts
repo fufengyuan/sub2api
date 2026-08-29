@@ -120,7 +120,7 @@ export default {
         credits: '积分',
         actions: '操作'
       },
-      // 三渠道（WorkBuddy / TraeWork / Qoder）积分与签到
+      // 三渠道（WorkBuddy / TraeWork / Qoder / QwenWork）积分与签到
       cnCredits: {
         refreshCredits: '刷新积分',
         refreshSuccess: '积分已刷新：{credits}',
@@ -1083,6 +1083,7 @@ export default {
       // 国内工具平台（WorkBuddy / TraeWork / Qoder）OAuth 凭证
       domesticTool: {
         platformQoder: 'Qoder',
+        platformQwenwork: '千问办公',
         oauthType: 'OAuth',
         apikeyType: 'API Key',
         accountTypeHint: '选择账号的添加方式',
@@ -1102,6 +1103,7 @@ export default {
         oauthLocalOnly: 'TraeWork 一键授权仅支持通过 127.0.0.1 本机访问（授权页只回调本机回环地址）。远程部署请通过 SSH 端口转发访问后台，或改用「粘贴 auth JSON」方式添加',
         accessToken: 'Access Token',
         refreshToken: 'Refresh Token',
+        expiresAt: '过期时间',
         machineId: 'Machine ID',
         deviceId: 'Device ID',
         domain: 'Domain',

@@ -190,7 +190,7 @@ func isConcreteRequestPlatform(platform string) bool {
 	switch platform {
 	case PlatformAnthropic, PlatformOpenAI, PlatformGemini, PlatformAntigravity, PlatformGrok,
 		PlatformKimi, PlatformZhipu, PlatformDeepseek,
-		PlatformWorkBuddy, PlatformTraeWork, PlatformQoder:
+		PlatformWorkBuddy, PlatformTraeWork, PlatformQoder, PlatformQwenWork:
 		return true
 	default:
 		return false

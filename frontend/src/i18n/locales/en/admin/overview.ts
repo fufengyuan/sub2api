@@ -959,6 +959,7 @@ export default {
         workbuddy: 'WorkBuddy',
         traework: 'TraeWork',
         qoder: 'Qoder',
+        qwenwork: 'QwenWork',
         composite: 'Composite',
       },
       deleteConfirm:

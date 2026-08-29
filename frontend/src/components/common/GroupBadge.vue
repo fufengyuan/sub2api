@@ -180,6 +180,9 @@ const labelClass = computed(() => {
   if (props.platform === 'qoder') {
     return `${base} bg-amber-200/60 text-amber-800 dark:bg-amber-800/40 dark:text-amber-300`
   }
+  if (props.platform === 'qwenwork') {
+    return `${base} bg-fuchsia-200/60 text-fuchsia-800 dark:bg-fuchsia-800/40 dark:text-fuchsia-300`
+  }
   if (props.platform === 'composite') {
     return `${base} bg-cyan-200/70 text-cyan-900 dark:bg-cyan-900/50 dark:text-cyan-300`
   }
@@ -247,6 +250,11 @@ const badgeClass = computed(() => {
     return isSubscription.value
       ? 'bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400'
       : 'bg-amber-50 text-amber-700 dark:bg-amber-900/20 dark:text-amber-400'
+  }
+  if (props.platform === 'qwenwork') {
+    return isSubscription.value
+      ? 'bg-fuchsia-100 text-fuchsia-700 dark:bg-fuchsia-900/30 dark:text-fuchsia-400'
+      : 'bg-fuchsia-50 text-fuchsia-700 dark:bg-fuchsia-900/20 dark:text-fuchsia-400'
   }
   if (props.platform === 'composite') {
     return isSubscription.value

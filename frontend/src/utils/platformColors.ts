@@ -17,6 +17,7 @@ export type Platform =
   | 'workbuddy'
   | 'traework'
   | 'qoder'
+  | 'qwenwork'
   | 'composite'
 
 // ── Badge (bg + text + border, for inline badges with border) ───────
@@ -32,6 +33,7 @@ const BADGE: Record<Platform, string> = {
   workbuddy: 'bg-rose-500/10 text-rose-600 border-rose-500/30 dark:text-rose-400',
   traework: 'bg-sky-500/10 text-sky-600 border-sky-500/30 dark:text-sky-400',
   qoder: 'bg-amber-500/10 text-amber-600 border-amber-500/30 dark:text-amber-400',
+  qwenwork: 'bg-fuchsia-500/10 text-fuchsia-600 border-fuchsia-500/30 dark:text-fuchsia-400',
   composite: 'bg-cyan-500/10 text-cyan-700 border-cyan-500/30 dark:text-cyan-300'
 }
 const BADGE_DEFAULT = 'bg-slate-500/10 text-slate-600 border-slate-500/30 dark:text-slate-400'
@@ -49,6 +51,7 @@ const BADGE_LIGHT: Record<Platform, string> = {
   workbuddy: 'bg-rose-500/10 text-rose-600 dark:bg-rose-500/10 dark:text-rose-300',
   traework: 'bg-sky-500/10 text-sky-600 dark:bg-sky-500/10 dark:text-sky-300',
   qoder: 'bg-amber-500/10 text-amber-600 dark:bg-amber-500/10 dark:text-amber-300',
+  qwenwork: 'bg-fuchsia-500/10 text-fuchsia-600 dark:bg-fuchsia-500/10 dark:text-fuchsia-300',
   composite: 'bg-cyan-500/10 text-cyan-700 dark:bg-cyan-500/10 dark:text-cyan-300'
 }
 
@@ -65,6 +68,7 @@ const BORDER: Record<Platform, string> = {
   workbuddy: 'border-rose-500/20 dark:border-rose-500/20',
   traework: 'border-sky-500/20 dark:border-sky-500/20',
   qoder: 'border-amber-500/20 dark:border-amber-500/20',
+  qwenwork: 'border-fuchsia-500/20 dark:border-fuchsia-500/20',
   composite: 'border-cyan-500/20 dark:border-cyan-500/20'
 }
 const BORDER_DEFAULT = 'border-gray-200 dark:border-dark-700'
@@ -82,6 +86,7 @@ const BORDER_STRONG: Record<Platform, string> = {
   workbuddy: 'border-rose-500/35 dark:border-rose-500/30',
   traework: 'border-sky-500/35 dark:border-sky-500/30',
   qoder: 'border-amber-500/35 dark:border-amber-500/30',
+  qwenwork: 'border-fuchsia-500/35 dark:border-fuchsia-500/30',
   composite: 'border-cyan-500/35 dark:border-cyan-500/30'
 }
 const BORDER_STRONG_DEFAULT = 'border-gray-300 dark:border-dark-600'
@@ -100,6 +105,7 @@ const ACCENT: Record<Platform, string> = {
   workbuddy: '#f43f5e', // rose-500
   traework: '#0ea5e9', // sky-500
   qoder: '#f59e0b', // amber-500
+  qwenwork: '#d946ef', // fuchsia-500
   composite: '#06b6d4', // cyan-500
 }
 const ACCENT_DEFAULT = '#14b8a6' // primary-500 (teal)
@@ -117,6 +123,7 @@ const ACCENT_BAR: Record<Platform, string> = {
   workbuddy: 'bg-gradient-to-r from-rose-400 to-rose-500',
   traework: 'bg-gradient-to-r from-sky-400 to-sky-500',
   qoder: 'bg-gradient-to-r from-amber-400 to-amber-500',
+  qwenwork: 'bg-gradient-to-r from-fuchsia-400 to-fuchsia-500',
   composite: 'bg-gradient-to-r from-slate-500 to-cyan-500'
 }
 const ACCENT_BAR_DEFAULT = 'bg-gradient-to-r from-primary-400 to-primary-500'
@@ -134,6 +141,7 @@ const TEXT: Record<Platform, string> = {
   workbuddy: 'text-rose-600 dark:text-rose-400',
   traework: 'text-sky-600 dark:text-sky-400',
   qoder: 'text-amber-600 dark:text-amber-400',
+  qwenwork: 'text-fuchsia-600 dark:text-fuchsia-400',
   composite: 'text-cyan-700 dark:text-cyan-300'
 }
 const TEXT_DEFAULT = 'text-primary-600 dark:text-primary-400'
@@ -151,6 +159,7 @@ const ICON: Record<Platform, string> = {
   workbuddy: 'text-rose-500 dark:text-rose-400',
   traework: 'text-sky-500 dark:text-sky-400',
   qoder: 'text-amber-500 dark:text-amber-400',
+  qwenwork: 'text-fuchsia-500 dark:text-fuchsia-400',
   composite: 'text-cyan-600 dark:text-cyan-300'
 }
 const ICON_DEFAULT = 'text-primary-500 dark:text-primary-400'
@@ -168,6 +177,7 @@ const BUTTON: Record<Platform, string> = {
   workbuddy: 'bg-rose-500 text-white hover:bg-rose-600 active:bg-rose-700 dark:bg-rose-500/80 dark:hover:bg-rose-500',
   traework: 'bg-sky-500 text-white hover:bg-sky-600 active:bg-sky-700 dark:bg-sky-500/80 dark:hover:bg-sky-500',
   qoder: 'bg-amber-500 text-white hover:bg-amber-600 active:bg-amber-700 dark:bg-amber-500/80 dark:hover:bg-amber-500',
+  qwenwork: 'bg-fuchsia-500 text-white hover:bg-fuchsia-600 active:bg-fuchsia-700 dark:bg-fuchsia-500/80 dark:hover:bg-fuchsia-500',
   composite: 'bg-cyan-700 text-white hover:bg-cyan-800 active:bg-cyan-900 dark:bg-cyan-600 dark:hover:bg-cyan-500'
 }
 const BUTTON_DEFAULT = 'bg-primary-500 text-white hover:bg-primary-600 dark:bg-primary-600 dark:hover:bg-primary-500'
@@ -185,6 +195,7 @@ const DISCOUNT: Record<Platform, string> = {
   workbuddy: 'bg-rose-100 text-rose-700 dark:bg-rose-900/40 dark:text-rose-300',
   traework: 'bg-sky-100 text-sky-700 dark:bg-sky-900/40 dark:text-sky-300',
   qoder: 'bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-300',
+  qwenwork: 'bg-fuchsia-100 text-fuchsia-700 dark:bg-fuchsia-900/40 dark:text-fuchsia-300',
   composite: 'bg-cyan-100 text-cyan-800 dark:bg-cyan-900/40 dark:text-cyan-300'
 }
 const DISCOUNT_DEFAULT = 'bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-300'
@@ -202,6 +213,7 @@ const GRADIENT: Record<Platform, string> = {
   workbuddy: 'from-rose-500 to-rose-600',
   traework: 'from-sky-500 to-sky-600',
   qoder: 'from-amber-500 to-amber-600',
+  qwenwork: 'from-fuchsia-500 to-fuchsia-600',
   composite: 'from-slate-600 to-cyan-600'
 }
 const GRADIENT_DEFAULT = 'from-primary-500 to-primary-600'
@@ -219,6 +231,7 @@ const GRADIENT_TEXT: Record<Platform, string> = {
   workbuddy: 'text-rose-100',
   traework: 'text-sky-100',
   qoder: 'text-amber-100',
+  qwenwork: 'text-fuchsia-100',
   composite: 'text-cyan-100'
 }
 const GRADIENT_TEXT_DEFAULT = 'text-primary-100'
@@ -235,6 +248,7 @@ const GRADIENT_SUBTEXT: Record<Platform, string> = {
   workbuddy: 'text-rose-200',
   traework: 'text-sky-200',
   qoder: 'text-amber-200',
+  qwenwork: 'text-fuchsia-200',
   composite: 'text-cyan-200'
 }
 const GRADIENT_SUBTEXT_DEFAULT = 'text-primary-200'
@@ -254,6 +268,7 @@ function isPlatform(p: string): p is Platform {
     p === 'workbuddy' ||
     p === 'traework' ||
     p === 'qoder' ||
+    p === 'qwenwork' ||
     p === 'composite'
   )
 }
@@ -323,6 +338,7 @@ export function platformLabel(p: string): string {
     case 'workbuddy': return 'WorkBuddy'
     case 'traework': return 'TraeWork'
     case 'qoder': return 'Qoder'
+    case 'qwenwork': return '千问办公'
     case 'composite': return 'Composite'
     default: return p || 'API'
   }

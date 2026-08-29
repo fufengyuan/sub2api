@@ -56,6 +56,10 @@
   <svg v-else-if="platform === 'qoder'" :class="sizeClass" viewBox="0 0 24 24" fill="currentColor">
     <path d="M12 2l2.4 7.6L22 12l-7.6 2.4L12 22l-2.4-7.6L2 12l7.6-2.4L12 2zm0 5.34L11.2 9.3 9.34 10 11.2 10.7 12 12.66l.8-1.96L14.66 10 12.8 9.3 12 7.34z"/>
   </svg>
+  <!-- QwenWork logo (chat bubble) -->
+  <svg v-else-if="platform === 'qwenwork'" :class="sizeClass" viewBox="0 0 24 24" fill="currentColor">
+    <path d="M12 3C6.9 3 2.8 6.4 2.8 10.6c0 2.4 1.3 4.5 3.4 5.9-.1 1.1-.6 2.4-1.6 3.4-.2.2 0 .6.3.6 2-.2 3.6-1 4.7-1.8.8.2 1.6.3 2.4.3 5.1 0 9.2-3.4 9.2-7.6S17.1 3 12 3z"/>
+  </svg>
   <!-- Composite group icon -->
   <svg v-else-if="platform === 'composite'" :class="sizeClass" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
     <circle cx="6" cy="12" r="3" />

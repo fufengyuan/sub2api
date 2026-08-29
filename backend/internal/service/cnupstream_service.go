@@ -16,6 +16,7 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/cnupstream/pool"
 	"github.com/Wei-Shaw/sub2api/internal/cnupstream/provider"
 	"github.com/Wei-Shaw/sub2api/internal/cnupstream/qoder"
+	"github.com/Wei-Shaw/sub2api/internal/cnupstream/qwenwork"
 	"github.com/Wei-Shaw/sub2api/internal/cnupstream/scheduler"
 	"github.com/Wei-Shaw/sub2api/internal/cnupstream/traework"
 	"github.com/Wei-Shaw/sub2api/internal/cnupstream/upstream"
@@ -40,7 +41,8 @@ type cnUpstreamPlatform struct {
 	upstream provider.Upstream
 }
 
-// CnUpstreamService 多渠道上游服务：加载三渠道账号组池并提供 ChatStream / 签到 / 刷新等能力。
+// CnUpstreamService 多渠道上游服务：加载国产渠道（workbuddy/traework/qoder/qwenwork）
+// 账号组池并提供 ChatStream / 签到 / 刷新等能力。
 type CnUpstreamService struct {
 	accountRepo cnAccountRepo
 	cfg         *config.Config
@@ -63,6 +65,7 @@ func NewCnUpstreamService(accountRepo cnAccountRepo, cfg *config.Config) *CnUpst
 	svc.platforms[PlatformWorkBuddy] = &cnUpstreamPlatform{pool: pool.New(""), upstream: upstream.New()}
 	svc.platforms[PlatformTraeWork] = &cnUpstreamPlatform{pool: pool.New(""), upstream: traework.New()}
 	svc.platforms[PlatformQoder] = &cnUpstreamPlatform{pool: pool.New(""), upstream: qoder.New()}
+	svc.platforms[PlatformQwenWork] = &cnUpstreamPlatform{pool: pool.New(""), upstream: qwenwork.New()}
 	return svc
 }
 
@@ -82,7 +85,7 @@ func (s *CnUpstreamService) PlatformUpstream(platform string) provider.Upstream 
 	return nil
 }
 
-// ReloadAccounts 从 ent 账号库加载三渠道账号并同步进各自的池。
+// ReloadAccounts 从 ent 账号库加载国产渠道账号并同步进各自的池。
 func (s *CnUpstreamService) ReloadAccounts(ctx context.Context) error {
 	for platform, rt := range s.platforms {
 		accounts, err := s.accountRepo.ListByPlatform(ctx, platform)
@@ -394,7 +397,7 @@ type CnCheckinResult struct {
 	CreditsRemain int64  `json:"credits_remain"`
 }
 
-// loadCnAccount 按账号 ID 取三渠道账号并构造运行期 auth；非三渠道平台报错。
+// loadCnAccount 按账号 ID 取国产渠道账号并构造运行期 auth；非国产平台报错。
 func (s *CnUpstreamService) loadCnAccount(ctx context.Context, accountID int64) (*cnUpstreamPlatform, *Account, *auth.Auth, error) {
 	getter, ok := s.accountRepo.(cnAccountGetter)
 	if !ok {
@@ -542,7 +545,7 @@ func (s *CnUpstreamService) CheckinNow(ctx context.Context, accountID int64) (*C
 	return &CnCheckinResult{Success: true, Message: msg, CreditsRemain: remain}, nil
 }
 
-// FetchUpstreamModels 拉取三渠道账号的上游真实模型列表（供模型映射配置辅助选择）。
+// FetchUpstreamModels 拉取国产渠道账号的上游真实模型列表（供模型映射配置辅助选择）。
 func (s *CnUpstreamService) FetchUpstreamModels(ctx context.Context, accountID int64) ([]provider.ModelInfo, error) {
 	rt, _, a, err := s.loadCnAccount(ctx, accountID)
 	if err != nil {

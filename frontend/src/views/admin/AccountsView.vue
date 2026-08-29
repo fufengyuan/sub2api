@@ -2511,7 +2511,7 @@ const handleToggleSchedulable = async (a: Account) => {
 const handleShowTempUnsched = (a: Account) => { tempUnschedAcc.value = a; showTempUnsched.value = true }
 // ── 三渠道（WorkBuddy / TraeWork / Qoder）积分与签到 ──
 const isCnUpstreamRow = (row: any) =>
-  row?.platform === 'workbuddy' || row?.platform === 'traework' || row?.platform === 'qoder'
+  row?.platform === 'workbuddy' || row?.platform === 'traework' || row?.platform === 'qoder' || row?.platform === 'qwenwork'
 const getCreditsRemain = (row: any) => {
   const remain = (row?.credentials as Record<string, unknown> | undefined)?.creditsRemain
   return typeof remain === 'number' ? remain : '-'
