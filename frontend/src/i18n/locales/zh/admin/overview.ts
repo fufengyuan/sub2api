@@ -1057,59 +1057,6 @@ export default {
         selectAll: '全选',
         invertSelection: '反选'
       },
-      compositeRoutes: {
-        action: '路由',
-        title: 'Composite 路由',
-        titleWithGroup: 'Composite 路由：{name}',
-        routes: '已保存路由',
-        empty: '暂无 Composite 路由',
-        publicModel: '公开模型',
-        target: '目标',
-        scope: '范围',
-        priority: '优先级',
-        addRoute: '添加路由',
-        editRoute: '编辑路由',
-        matchType: '匹配方式',
-        endpoint: '端点',
-        targetPlatform: '目标平台',
-        upstreamModel: '上游模型',
-        upstreamModelHint: '留空表示透传原始请求模型：前缀匹配下每个命中模型各自原样转发（如 deepseek-v4-flash、deepseek-v4-pro 分别转发）；填写则所有命中请求都固定转发该模型。',
-        fallbackTargets: 'Fallback 目标平台',
-        fallbackTargetsHint: '主目标平台无健康账号或余额不足时，按列表顺序自动 fallback 到下一个平台。',
-        addFallbackTarget: '添加 Fallback 目标',
-        notes: '备注',
-        enabled: '启用',
-        preview: '预览',
-        matched: '已匹配',
-        notMatched: '未匹配',
-        publicModelRequired: '请输入公开模型',
-        routeCreated: 'Composite 路由已创建',
-        routeUpdated: 'Composite 路由已更新',
-        routeDeleted: 'Composite 路由已删除',
-        failedToLoad: '加载 Composite 路由失败',
-        failedToSave: '保存 Composite 路由失败',
-        failedToDelete: '删除 Composite 路由失败',
-        failedToPreview: '预览 Composite 路由失败',
-        deleteConfirm: '确定删除此 Composite 路由？',
-        endpoints: {
-          any: '任意',
-          messages: 'Messages',
-          countTokens: 'Count Tokens',
-          responses: 'Responses',
-          chatCompletions: 'Chat Completions',
-          embeddings: 'Embeddings',
-          images: 'Images',
-          gemini: 'Gemini 原生'
-        },
-        match: {
-          exact: '精确',
-          prefix: '前缀'
-        },
-        sources: {
-          route: '路由',
-          detector: '内置识别'
-        }
-      },
       claudeCode: {
         title: 'Claude Code 客户端限制',
         tooltip:

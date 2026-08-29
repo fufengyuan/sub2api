@@ -18,18 +18,3 @@ func TestCanCopyAccountsFromCompositeGroup_CnPlatforms(t *testing.T) {
 }
 
 // 回归：组合路由的目标平台必须接受三渠道，否则模型路由无法指向三渠道转发。
-func TestCompositeRouteFromInput_AcceptsCnTargetPlatform(t *testing.T) {
-	for _, target := range []string{PlatformWorkBuddy, PlatformTraeWork, PlatformQoder} {
-		route, err := compositeRouteFromInput(7, CompositeRouteInput{
-			PublicModel:    "deepseek-v4-flash",
-			MatchType:      CompositeRouteMatchExact,
-			TargetPlatform: target,
-			UpstreamModel:  "DeepSeek-V4-Flash",
-			Endpoint:       CompositeRouteEndpointAny,
-			Enabled:        true,
-		})
-		require.NoErrorf(t, err, "target_platform=%s", target)
-		require.NotNil(t, route)
-		require.Equal(t, target, route.TargetPlatform)
-	}
-}
