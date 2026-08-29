@@ -882,12 +882,9 @@ func (r *groupRepository) DeleteCascade(ctx context.Context, id int64) ([]int64,
 		return nil, err
 	}
 
-	// 4. Soft-delete composite model routes owned by this group.
-	if _, err := exec.ExecContext(ctx, "UPDATE composite_model_routes SET deleted_at = NOW() WHERE group_id = $1 AND deleted_at IS NULL", id); err != nil {
-		return nil, err
-	}
-
-	// 5. Soft-delete group itself.
+	// 4. Soft-delete group itself.
+	// （原「软删 composite_model_routes」步骤随该表下线一并移除：
+	//   表已 DROP，保留这句会让删分组在级联事务里报 relation does not exist。）
 	if _, err := txClient.Group.Delete().Where(group.IDEQ(id)).Exec(ctx); err != nil {
 		return nil, err
 	}
