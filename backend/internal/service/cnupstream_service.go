@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -14,8 +15,8 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/cnupstream/auth"
 	"github.com/Wei-Shaw/sub2api/internal/cnupstream/pool"
 	"github.com/Wei-Shaw/sub2api/internal/cnupstream/provider"
-	"github.com/Wei-Shaw/sub2api/internal/cnupstream/scheduler"
 	"github.com/Wei-Shaw/sub2api/internal/cnupstream/qoder"
+	"github.com/Wei-Shaw/sub2api/internal/cnupstream/scheduler"
 	"github.com/Wei-Shaw/sub2api/internal/cnupstream/traework"
 	"github.com/Wei-Shaw/sub2api/internal/cnupstream/upstream"
 	"github.com/Wei-Shaw/sub2api/internal/config"
@@ -47,8 +48,8 @@ type CnUpstreamService struct {
 	platforms map[string]*cnUpstreamPlatform
 	// acctRefs uid -> *Account，RefreshToken 后回写凭证用（保留其余字段避免覆盖丢失）。
 	// 调度器与管理端 HTTP 并发访问，mu 保护 map 读写。
-	mu        sync.Mutex
-	acctRefs  map[string]*Account
+	mu       sync.Mutex
+	acctRefs map[string]*Account
 }
 
 // NewCnUpstreamService 构建三个平台各自的 Pool + Upstream。
@@ -106,6 +107,7 @@ func hydrateAuth(acct *Account, platform string) *auth.Auth {
 	a := &auth.Auth{
 		Kind:         platform,
 		UID:          strconv.FormatInt(acct.ID, 10),
+		AccountID:    acct.ID,
 		AccessToken:  credString(acct.Credentials, "accessToken"),
 		RefreshToken: credString(acct.Credentials, "refreshToken"),
 		Domain:       credString(acct.Credentials, "domain"),
@@ -151,20 +153,63 @@ func numberToInt64(v any) (int64, bool) {
 	}
 }
 
-// ChatStream 对指定平台按池内账号健康度挑号转发；失败账号按分类冷却/禁用并轮换，
-// 成功后返回 SSE 流。无健康账号时返回错误。
-func (s *CnUpstreamService) ChatStream(platform string, body []byte) (io.ReadCloser, int, []byte, error) {
+// CnChatTarget 一次 CN 上游 Chat 调用的结果：实际使用的池账号 + 上游响应 +
+// 转换结束后的结果回灌回调。
+type CnChatTarget struct {
+	Platform  string
+	UID       string
+	AccountID int64
+	RC        io.ReadCloser
+	Status    int
+	Body      []byte
+
+	// report 把流转换/聚合阶段的结果回灌池状态机。SSE 流内业务错误（4008/4028
+	// 配额超限、1005 权益不足）发生在 HTTP 200 之后，旧实现只在 status>=400 时
+	// 冷却，导致被限流账号下一轮仍按「池内积分最高」被选中，用户侧同一个错误
+	// 反复出现。
+	report func(err error)
+}
+
+// Report 在流转换/聚合结束后回灌结果：err 为 nil 时不做处理（成功已在取号时
+// NoteSuccess），否则按错误分类对实际使用的账号施加冷却/禁用。
+func (t *CnChatTarget) Report(err error) {
+	if t == nil || t.report == nil {
+		return
+	}
+	t.report(err)
+}
+
+// CnPoolExhaustedError 表示该平台池内账号全部处于冷却/禁用状态。
+// RetryAfter 取池内最早的冷却恢复时间，供网关向客户端下发 Retry-After。
+type CnPoolExhaustedError struct {
+	Platform   string
+	RetryAfter time.Duration
+	Accounts   int
+}
+
+func (e *CnPoolExhaustedError) Error() string {
+	if e.RetryAfter > 0 {
+		return fmt.Sprintf("cnupstream: all %s accounts cooling (retry after %s)", e.Platform, e.RetryAfter.Truncate(time.Second))
+	}
+	return fmt.Sprintf("cnupstream: all %s accounts unavailable", e.Platform)
+}
+
+// ChatStream 转发一次 Chat 请求：优先使用统一池选中的账号（accountID，<=0 时
+// 按池策略挑积分最高的健康账号），失败账号按分类冷却/禁用并轮换。
+// 返回的 *CnChatTarget 必须在流转换结束后调用 Report，以便把 SSE 流内业务错误
+// 回灌到池冷却状态机。
+func (s *CnUpstreamService) ChatStream(platform string, accountID int64, body []byte) (*CnChatTarget, error) {
 	rt, ok := s.platforms[platform]
 	if !ok {
-		return nil, 0, nil, fmt.Errorf("cnupstream: unsupported platform %s", platform)
+		return nil, fmt.Errorf("cnupstream: unsupported platform %s", platform)
 	}
 	count := len(rt.pool.List())
 	if count == 0 {
-		return nil, 0, nil, fmt.Errorf("cnupstream: no %s accounts loaded", platform)
+		return nil, fmt.Errorf("cnupstream: no %s accounts loaded", platform)
 	}
 	tried := map[string]bool{}
 	for len(tried) < count {
-		a := rt.pool.PickExcluding(tried)
+		a := rt.pool.PickForAccount(accountID, tried)
 		if a == nil {
 			break
 		}
@@ -182,9 +227,36 @@ func (s *CnUpstreamService) ChatStream(platform string, body []byte) (io.ReadClo
 			continue
 		}
 		rt.pool.NoteSuccess(a.UID)
-		return rc, status, respBody, nil
+		uid := a.UID
+		return &CnChatTarget{
+			Platform:  platform,
+			UID:       uid,
+			AccountID: a.AccountID,
+			RC:        rc,
+			Status:    status,
+			Body:      respBody,
+			report:    func(streamErr error) { s.reportStreamOutcome(platform, uid, streamErr) },
+		}, nil
 	}
-	return nil, 0, nil, fmt.Errorf("cnupstream: all %s accounts unavailable", platform)
+	retryAfter, _ := rt.pool.EarliestRecovery()
+	return nil, &CnPoolExhaustedError{Platform: platform, RetryAfter: retryAfter, Accounts: count}
+}
+
+// reportStreamOutcome 把流转换阶段的错误回灌池冷却：命中 SOLO 业务错误时按码表
+// 分类（软限流短冷却 / 硬权益长冷却 / 登录态失效禁用），其余错误按传输层失败短冷却。
+func (s *CnUpstreamService) reportStreamOutcome(platform, uid string, streamErr error) {
+	rt, ok := s.platforms[platform]
+	if !ok || uid == "" || streamErr == nil {
+		return
+	}
+	var soloErr *traework.SOLOStreamError
+	if errors.As(streamErr, &soloErr) {
+		applyCnCooldown(rt.pool, uid, soloErr.Kind())
+		log.Printf("cnupstream stream error cooling account platform=%s uid=%s kind=%s err=%s",
+			platform, uid, soloErr.Kind(), soloErr.Error())
+		return
+	}
+	rt.pool.Cooldown(uid, pool.CoolErr, 30*time.Second, streamErr.Error())
 }
 
 // applyCnCooldown 按错误分类对账号施以冷却/禁用；未命中明确类别时走错误计数阈值。

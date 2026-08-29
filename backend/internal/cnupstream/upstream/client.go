@@ -64,6 +64,14 @@ func Classify(status int, body string) ErrKind {
 	if status == http.StatusNotFound {
 		return ErrNotFound
 	}
+	// 业务码表优先于「4xx 一律 ErrClient」兜底：CodeBuddy 的配额/频控类业务码
+	// （与 Trae SOLO 同族，如 4008/4028）按状态码会被误判成需要累计 3 次错误
+	// 才冷却的客户端错误，导致被限流账号被反复优先选中。
+	if code, ok := provider.ExtractBusinessCode(body); ok {
+		if kind := provider.ClassifyBusinessCode(code, body); kind != ErrClient {
+			return kind
+		}
+	}
 	if status >= 500 {
 		return ErrServer
 	}
@@ -160,8 +168,9 @@ func (c *Client) doJSONWith(client *http.Client, req *http.Request) (json.RawMes
 	}
 	if env.Code != 0 {
 		kind := Classify(resp.StatusCode, env.Msg)
-		if kind == ErrNone {
-			kind = ErrClient
+		if kind == ErrNone || kind == ErrClient {
+			// 文案未命中余额/登录态等标记时，按业务码表分类（间歇限流 → 短冷却）。
+			kind = provider.ClassifyBusinessCode(int64(env.Code), env.Msg)
 		}
 		return nil, &Error{Kind: kind, Status: resp.StatusCode, Msg: fmt.Sprintf("code=%d msg=%s", env.Code, truncate(env.Msg, 160))}
 	}

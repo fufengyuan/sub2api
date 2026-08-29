@@ -191,6 +191,59 @@ func (p *Pool) PickExcluding(tried map[string]bool) *auth.Auth {
 	return nil
 }
 
+// PickForAccount 优先返回网关统一池选中的账号（preferredAccountID = ent 账号主键）：
+// 该账号健康且未被 tried 排除时直接命中；否则回落到 PickExcluding 的「健康账号中
+// 积分最高者」。让「调度选中的账号」真正成为「实际转发用的账号」，账号级冷却与
+// failover 排除集才能对上游池生效。
+func (p *Pool) PickForAccount(preferredAccountID int64, tried map[string]bool) *auth.Auth {
+	if preferredAccountID <= 0 {
+		return p.PickExcluding(tried)
+	}
+	p.mu.RLock()
+	now := time.Now()
+	for uid, e := range p.byUID {
+		if e.a == nil || e.a.AccountID != preferredAccountID {
+			continue
+		}
+		if tried != nil && tried[uid] {
+			break
+		}
+		if e.healthy(now) {
+			a := e.a
+			p.mu.RUnlock()
+			return a
+		}
+		break
+	}
+	p.mu.RUnlock()
+	return p.PickExcluding(tried)
+}
+
+// EarliestRecovery 返回池内未禁用账号中最早的冷却恢复剩余时间。
+// 全部健康（无冷却中账号）或池为空时返回 (0, false)。供上层在「整池不可用」时
+// 给客户端下发 Retry-After，避免用户在冷却窗口内反复重试打爆上游。
+func (p *Pool) EarliestRecovery() (time.Duration, bool) {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	now := time.Now()
+	var earliest time.Time
+	for _, e := range p.byUID {
+		if e.disabled {
+			continue
+		}
+		if e.until.IsZero() || !now.Before(e.until) {
+			continue
+		}
+		if earliest.IsZero() || e.until.Before(earliest) {
+			earliest = e.until
+		}
+	}
+	if earliest.IsZero() {
+		return 0, false
+	}
+	return time.Until(earliest), true
+}
+
 // SetPreferred 设置账号是否优先使用（持久化到 state）。
 func (p *Pool) SetPreferred(uid string, pref bool) {
 	p.mu.Lock()

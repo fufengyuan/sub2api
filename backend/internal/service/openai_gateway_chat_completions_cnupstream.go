@@ -4,9 +4,12 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -35,12 +38,14 @@ func IsCnUpstreamPlatform(platform string) bool {
 }
 
 // forwardCnUpstreamChatCompletions 实现三渠道（workbuddy/traework/qoder）的
-// 最小 Chat 分支：按 composite 候选平台依次直调 CnUpstreamService.ChatStream 挑
-// 池内健康账号，把私有 SSE 转换成 OpenAI 兼容格式回写客户端，并从输出中抽取 usage
-// 按 tokens 计费（上游消耗积分，网关侧以 token 口径入账）。
+// 最小 Chat 分支：按选中账号所属平台直调 CnUpstreamService.ChatStream，把私有
+// SSE 转换成 OpenAI 兼容格式回写客户端，并从输出中抽取 usage 按 tokens 计费
+// （上游消耗积分，网关侧以 token 口径入账）。
 //
-// 跨平台 fallback：从 ctx 读取 composite 候选平台列表（account.Platform 优先），
-// 前一平台在未写出任何响应前失败则尝试下一个候选平台，切换后同一请求即命中票足的健康账号。
+// 统一账号池后不再有跨平台 fallback：调度层（composite 组）已按账号级规则
+// 在跨平台池内选号，失败账号由 handler 层 failover 循环排除后重选，本函数
+// 只对选中账号的平台执行一次完整转发；未写出任何响应前的失败包装为
+// UpstreamFailoverError 以接入 handler 的账号级重试。
 func (s *OpenAIGatewayService) forwardCnUpstreamChatCompletions(
 	ctx context.Context,
 	c *gin.Context,
@@ -54,7 +59,7 @@ func (s *OpenAIGatewayService) forwardCnUpstreamChatCompletions(
 	billingModel := account.GetMappedModel(originalModel)
 	reqStream := gjson.GetBytes(body, "stream").Bool()
 
-	if s.cnUpstream == nil && s.cnChatStream == nil {
+	if s.cnUpstream == nil {
 		return nil, fmt.Errorf("cnupstream: service not wired")
 	}
 
@@ -68,38 +73,81 @@ func (s *OpenAIGatewayService) forwardCnUpstreamChatCompletions(
 	}
 
 	firstTokenMs := int(time.Since(startTime).Milliseconds())
-	var lastErr error
-	for _, platform := range s.cnFallbackPlatformOrder(ctx, account.Platform) {
-		res, err := s.forwardCnUpstreamSinglePlatform(c, platform, forwardBody, originalModel, billingModel, reqStream, startTime, firstTokenMs)
-		if err == nil {
-			return res, nil
-		}
-		lastErr = err
-		// 已写出响应（至少状态头/首个 chunk）时不可再跨平台 fallback，避免半途切换。
-		if isCnResponseCommitted(c) {
-			break
-		}
+	res, err := s.forwardCnUpstreamSinglePlatform(c, account, forwardBody, originalModel, billingModel, reqStream, startTime, firstTokenMs)
+	if err != nil && !isCnResponseCommitted(c) {
+		// 未写出任何响应：包装成可 failover 错误，由 handler 排除本账号后重选。
+		return nil, cnUpstreamFailoverError(account, err)
 	}
-	if lastErr == nil {
-		lastErr = fmt.Errorf("cnupstream: all candidate platforms unavailable")
-	}
-	return nil, lastErr
+	return res, err
 }
 
-// cnFallbackPlatformOrder 构造跨平台 fallback 尝试顺序：account.Platform 优先，
-// 其后按 composite 候选平台顺序追加以漏的国产渠道平台（去重）。
-func (s *OpenAIGatewayService) cnFallbackPlatformOrder(ctx context.Context, primary string) []string {
-	order := []string{primary}
-	seen := map[string]bool{primary: true}
-	for _, cand := range CompositeCandidatesFromContext(ctx) {
-		p := cand.Platform
-		if p == "" || seen[p] || !isCnUpstreamPlatform(p) {
-			continue
+// cnSoftRateSwitchBackoff 软限流（4008/4028 等）换号前的短退避：给上游一秒级
+// 的恢复窗口，同时把单次请求的额外延迟控制在常数级（handler 侧限制最多退避
+// 两次，见 FailoverState.maxDeferredSwitchBackoffs）。
+const cnSoftRateSwitchBackoff = 2 * time.Second
+
+// cnUpstreamFailoverError 把 CN 上游失败包装为 UpstreamFailoverError：
+// 统一账号池下失败账号交由 handler failover 循环排除重选（8 次保险丝）。
+//   - 整池冷却（*CnPoolExhaustedError）：按 429 + Retry-After 返回，让客户端
+//     按最早恢复时间退避，而不是把它当可立即重试的 502 反复打上游。
+//   - SSE 流内业务错误（4008/4028 配额超限、1005 权益不足）：属账号级问题，
+//     标记账号作用域让调度器记录健康度；软限流类附带换号退避延迟。
+//   - 其余传输层失败：按请求级处理，不对账号做健康惩罚。
+func cnUpstreamFailoverError(account *Account, err error) *UpstreamFailoverError {
+	scope := GatewayFailureScopeRequest
+	status := http.StatusBadGateway
+	var headers http.Header
+	var backoff time.Duration
+
+	var exhausted *CnPoolExhaustedError
+	if errors.As(err, &exhausted) {
+		status = http.StatusTooManyRequests
+		scope = GatewayFailureScopeAccount
+		if exhausted.RetryAfter > 0 {
+			seconds := int(math.Ceil(exhausted.RetryAfter.Seconds()))
+			if seconds < 1 {
+				seconds = 1
+			}
+			headers = http.Header{"Retry-After": []string{strconv.Itoa(seconds)}}
 		}
-		seen[p] = true
-		order = append(order, p)
+	} else if soloErr := cnSoloStreamError(err); soloErr != nil {
+		scope = GatewayFailureScopeAccount
+		if soloErr.Kind() == provider.ErrSoftRate {
+			backoff = cnSoftRateSwitchBackoff
+		}
+	} else if code, ok := provider.ExtractBusinessCode(err.Error()); ok &&
+		provider.ClassifyBusinessCode(code, err.Error()) == provider.ErrSoftRate {
+		// 上游以 HTTP 4xx + JSON 业务码下发的间歇配额/频控：同样按软限流处理。
+		scope = GatewayFailureScopeAccount
+		backoff = cnSoftRateSwitchBackoff
 	}
-	return order
+
+	return &UpstreamFailoverError{
+		StatusCode:            status,
+		Stage:                 GatewayFailureStageInference,
+		Scope:                 scope,
+		Reason:                GatewayFailureReason(fmt.Sprintf("cnupstream %s: %v", cnAccountPlatform(account), err)),
+		ResponseBody:          []byte(err.Error()),
+		ResponseHeaders:       headers,
+		NextAccountRetryDelay: backoff,
+	}
+}
+
+// cnSoloStreamError 从错误链里取 SSE 流内业务错误（未产出内容时由
+// traework.StreamBeforeOutputError 包装，聚合路径直接返回 *SOLOStreamError）。
+func cnSoloStreamError(err error) *traework.SOLOStreamError {
+	var soloErr *traework.SOLOStreamError
+	if errors.As(err, &soloErr) {
+		return soloErr
+	}
+	return nil
+}
+
+func cnAccountPlatform(account *Account) string {
+	if account == nil {
+		return "unknown"
+	}
+	return account.Platform
 }
 
 // cnStreamWithErrorUpstream 暴露 SSE 流内业务错误检测能力的上游客户端。
@@ -108,24 +156,36 @@ type cnStreamWithErrorUpstream interface {
 }
 
 // cnStream 流式转发：优先走 StreamWithError 识别 SSE 内 event:error
-//（如 4008 间歇配额超限 / 1005 权益不足），未产出内容时返回
-// traework.ErrStreamErrorBeforeOutput，让上层在未写出响应时触发跨平台 fallback；
+// （如 4008/4028 间歇配额超限 / 1005 权益不足），未产出内容时返回
+// traework.StreamBeforeOutputError（携带业务码），由上层包装成 failover 错误换号
+// 重试；无论是否已产出内容，业务错误都会经 onBusinessErr 上报，供上层回灌
+// 账号冷却——否则被限流的账号下一轮仍会被优先选中。
 // 不支持该能力的上游（workbuddy/qoder）回落普通 Stream。
-func (s *OpenAIGatewayService) cnStream(upstream provider.Upstream, cw *cnUsageCapturingWriter, rc io.ReadCloser) error {
+func (s *OpenAIGatewayService) cnStream(
+	upstream provider.Upstream,
+	cw *cnUsageCapturingWriter,
+	rc io.ReadCloser,
+	onBusinessErr func(*traework.SOLOStreamError),
+) error {
 	seu, ok := upstream.(cnStreamWithErrorUpstream)
 	if !ok {
 		return upstream.Stream(cw, rc)
 	}
-	return seu.StreamWithError(cw, rc, func(_ *traework.SOLOStreamError) bool {
-		return true // 未产出内容时要求上层 fallback
+	return seu.StreamWithError(cw, rc, func(se *traework.SOLOStreamError) bool {
+		if onBusinessErr != nil && se != nil {
+			onBusinessErr(se)
+		}
+		return true // 未产出内容时要求上层换号重试
 	})
 }
 
-// forwardCnUpstreamSinglePlatform 对单个平台执行 ChatStream→SSE→usage→response 的
-// 完整转发；返回错误且尚未提交响应时，由上层切换到下一个候选平台。
+// forwardCnUpstreamSinglePlatform 对选中账号执行 ChatStream→SSE→usage→response
+// 的完整转发；返回错误且尚未提交响应时，由 handler 层排除该账号重选。
+// 无论成功与否都会把结果回灌上游池（target.Report），让被限流/权益耗尽的账号
+// 进入冷却，下一轮选号自然绕开它。
 func (s *OpenAIGatewayService) forwardCnUpstreamSinglePlatform(
 	c *gin.Context,
-	platform string,
+	account *Account,
 	forwardBody []byte,
 	originalModel, billingModel string,
 	reqStream bool,
@@ -135,17 +195,24 @@ func (s *OpenAIGatewayService) forwardCnUpstreamSinglePlatform(
 	if s.cnUpstream == nil {
 		return nil, fmt.Errorf("cnupstream: service not wired")
 	}
-	rc, status, respBody, err := s.cnInvokeChatStream(platform, forwardBody)
+	platform := account.Platform
+	target, err := s.cnInvokeChatStream(platform, account.ID, forwardBody)
 	if err != nil {
-		// 传输层失败 / 无健康账号：未写出任何响应，交由上层尝试下一个候选平台。
+		// 传输层失败 / 整池冷却：未写出任何响应，交由 handler 排除本账号重选。
 		return nil, err
 	}
-	if rc != nil {
-		defer func() { _ = rc.Close() }()
+	if target == nil {
+		return nil, fmt.Errorf("cnupstream: %s returned nil target", platform)
 	}
+	if target.RC != nil {
+		defer func() { _ = target.RC.Close() }()
+	}
+	rc := target.RC
+	status := target.Status
+	respBody := target.Body
 	if status >= 400 {
 		// 上游 4xx/5xx：渠道上层已把失败账号冷却/禁用并轮换，走到这里说明该平台
-		// 全部账号不可用。落可读错误交由上层尝试下一个候选平台。
+		// 全部账号不可用。落可读错误交由 handler 排除本账号重选。
 		msg := strings.TrimSpace(string(respBody))
 		if msg == "" {
 			msg = fmt.Sprintf("cnupstream upstream %s http %d", platform, status)
@@ -175,21 +242,31 @@ func (s *OpenAIGatewayService) forwardCnUpstreamSinglePlatform(
 
 	if reqStream {
 		cw := newCnUsageCapturingWriter(c.Writer, &usage)
-		streamErr := s.cnStream(upstream, cw, rc)
+		// 已产出内容时 StreamWithError 返回 nil，业务错误只能从回调里拿；
+		// 两种情况都要回灌冷却，否则同一个被限流的账号会被反复选中。
+		var businessErr error
+		streamErr := s.cnStream(upstream, cw, rc, func(se *traework.SOLOStreamError) {
+			if businessErr == nil {
+				businessErr = se
+			}
+		})
 		if streamErr != nil {
+			target.Report(streamErr)
 			// 流已部分写出（至少状态头/首个 chunk）时照常计费，避免半途 SSE 丢计费；
-			// 未写出任何响应且是「未产出内容首遇业务错误」时，交由上层 fallback。
+			// 未写出任何响应时交由 handler 排除本账号重选。
 			if cw.written > 0 {
 				return buildResult(), nil
 			}
 			return nil, streamErr
 		}
+		target.Report(businessErr)
 		return buildResult(), nil
 	}
 
 	// 非流式：聚合完整响应，抽取 usage，写 JSON。
 	agg, err := upstream.Aggregate(rc)
 	if err != nil {
+		target.Report(err)
 		if !isCnResponseCommitted(c) {
 			return nil, err
 		}
@@ -204,13 +281,14 @@ func (s *OpenAIGatewayService) forwardCnUpstreamSinglePlatform(
 	return buildResult(), nil
 }
 
-// cnInvokeChatStream 分发 ChatStream 调用：默认走 CnUpstreamService，测试可注入
-// cnChatStream 覆盖（见 OpenAIGatewayService.cnChatStream 字段）。
-func (s *OpenAIGatewayService) cnInvokeChatStream(platform string, body []byte) (io.ReadCloser, int, []byte, error) {
+// cnInvokeChatStream 分发 ChatStream 调用：默认走 CnUpstreamService（以统一池
+// 选中的账号 ID 为优先取号依据），测试可注入 cnChatStream 覆盖
+// （见 OpenAIGatewayService.cnChatStream 字段）。
+func (s *OpenAIGatewayService) cnInvokeChatStream(platform string, accountID int64, body []byte) (*CnChatTarget, error) {
 	if s.cnChatStream != nil {
-		return s.cnChatStream(platform, body)
+		return s.cnChatStream(platform, accountID, body)
 	}
-	return s.cnUpstream.ChatStream(platform, body)
+	return s.cnUpstream.ChatStream(platform, accountID, body)
 }
 
 func isCnResponseCommitted(c *gin.Context) bool {
@@ -338,4 +416,4 @@ func usageFromCnUpstreamPayload(payload []byte) *OpenAIUsage {
 }
 
 // cnChatStreamFn 抽取 ChatStream 的签名，便于单测注入假上游（SSE fixture）。
-type cnChatStreamFn func(platform string, body []byte) (io.ReadCloser, int, []byte, error)
+type cnChatStreamFn func(platform string, accountID int64, body []byte) (*CnChatTarget, error)

@@ -29,6 +29,10 @@ type Auth struct {
 	MachineToken string // Qoder: cosy-machinetoken
 	MachineType  string // Qoder: cosy-machinetype
 	UID          string
+	// AccountID 是 sub2api ent 账号主键（由 hydrateAuth 写入，不落 auth 文件）。
+	// UID 可能被 credentials.uid 覆盖成上游用户 ID，网关统一账号池要按账号 ID
+	// 指定/排除池内账号，因此单独保存这个稳定主键。0 表示非数据库来源。
+	AccountID    int64 `json:"-"`
 	EnterpriseID string
 	Nickname     string
 	FilePath     string // 来源文件；refresh 后原子写回此处

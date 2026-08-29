@@ -400,6 +400,13 @@ func Classify(status int, body string) provider.ErrKind {
 	if status == http.StatusNotFound {
 		return provider.ErrNotFound
 	}
+	// 业务码表优先于「4xx 一律 ErrClient」兜底：间歇配额/频控类业务码按码表
+	// 短冷却换号，避免被反复优先选中（见 provider.errcode.go）。
+	if code, ok := provider.ExtractBusinessCode(body); ok {
+		if kind := provider.ClassifyBusinessCode(code, body); kind != provider.ErrClient {
+			return kind
+		}
+	}
 	if status >= 500 {
 		return provider.ErrServer
 	}

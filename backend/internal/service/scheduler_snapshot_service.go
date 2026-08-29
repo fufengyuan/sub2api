@@ -1463,6 +1463,15 @@ func (s *SchedulerSnapshotService) loadAccountsFromDB(ctx context.Context, bucke
 		groupID = 0
 	}
 
+	// composite 统一账号池：组内全部平台的 active+schedulable 账号，
+	// 不按平台过滤；平台只是账号属性，选号在账号级完成。
+	if bucket.Mode == SchedulerModeComposite {
+		if groupID > 0 {
+			return s.accountRepo.ListSchedulableByGroupID(ctx, groupID)
+		}
+		return s.accountRepo.ListSchedulable(ctx)
+	}
+
 	if useMixed {
 		platforms := []string{bucket.Platform, PlatformAntigravity}
 		var accounts []Account
@@ -1566,6 +1575,10 @@ func (s *SchedulerSnapshotService) normalizeGroupIDs(groupIDs []int64) []int64 {
 func (s *SchedulerSnapshotService) resolveMode(platform string, hasForcePlatform bool) string {
 	if hasForcePlatform {
 		return SchedulerModeForced
+	}
+	// composite 统一账号池：平台占位为 PlatformComposite（bucket 内仍按组隔离）。
+	if platform == PlatformComposite {
+		return SchedulerModeComposite
 	}
 	if platform == PlatformAnthropic || platform == PlatformGemini {
 		return SchedulerModeMixed

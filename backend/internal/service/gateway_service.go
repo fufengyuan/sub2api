@@ -680,12 +680,16 @@ type UpstreamFailoverError struct {
 	SameAccountRetryMax      int           // 可选的错误级同账号重试上限，低于 handler 默认预算时优先采用
 	RequestScopedTransient   bool          // 故障因素与账号无关（如上游按客户端身份/模型容量降载）：可同账号重试，但不得据此对账号做临时封禁
 	SafeToFailoverAfterWrite bool          // 仅写出 SSE 注释等非语义字节时，仍可在同一客户端流中切换账号
-	Stage                    GatewayFailureStage
-	Scope                    GatewayFailureScope
-	Reason                   GatewayFailureReason
-	NextAccountAction        NextAccountAction
-	ClientStatusCode         int
-	ClientMessage            string
+	// NextAccountRetryDelay 切换账号前的退避等待：上游软限流（配额/频控类业务码）
+	// 立即换号往往只是把同一个限流窗口再撞一遍，短暂退避能显著提升自愈率。
+	// 零值表示不额外等待；单次请求内的退避次数上限由 handler 侧统一控制。
+	NextAccountRetryDelay time.Duration
+	Stage                 GatewayFailureStage
+	Scope                 GatewayFailureScope
+	Reason                GatewayFailureReason
+	NextAccountAction     NextAccountAction
+	ClientStatusCode      int
+	ClientMessage         string
 }
 
 func (e *UpstreamFailoverError) Error() string {

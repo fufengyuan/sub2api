@@ -25,6 +25,9 @@ type mockAccountRepoForPlatform struct {
 	accountsByID     map[int64]*Account
 	listPlatformFunc func(ctx context.Context, platform string) ([]Account, error)
 	getByIDCalls     int
+	// byGroup 用于 composite 统一池场景：模拟「按分组拉取组内全平台账号」，
+	// 未设置时组内查询仍返回 nil 以保持既有测试行为不变。
+	byGroup []Account
 }
 
 func (m *mockAccountRepoForPlatform) GetByID(ctx context.Context, id int64) (*Account, error) {
@@ -129,9 +132,27 @@ func (m *mockAccountRepoForPlatform) BindGroups(ctx context.Context, accountID i
 	return nil
 }
 func (m *mockAccountRepoForPlatform) ListSchedulable(ctx context.Context) ([]Account, error) {
+	if m.byGroup != nil {
+		return m.schedulableByGroup(), nil
+	}
 	return nil, nil
 }
+
+// schedulableByGroup 模拟 composite 统一池的组内全平台查询（不按平台过滤）。
+func (m *mockAccountRepoForPlatform) schedulableByGroup() []Account {
+	var result []Account
+	for _, acc := range m.byGroup {
+		if acc.IsSchedulable() {
+			result = append(result, acc)
+		}
+	}
+	return result
+}
+
 func (m *mockAccountRepoForPlatform) ListSchedulableByGroupID(ctx context.Context, groupID int64) ([]Account, error) {
+	if m.byGroup != nil {
+		return m.schedulableByGroup(), nil
+	}
 	return nil, nil
 }
 func (m *mockAccountRepoForPlatform) ListSchedulableByPlatforms(ctx context.Context, platforms []string) ([]Account, error) {

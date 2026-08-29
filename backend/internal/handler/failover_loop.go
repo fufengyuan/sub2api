@@ -49,11 +49,35 @@ const (
 	// 取值与 maxAccountSwitches 默认值一致：混合定价的大分组仍有充分重选机会，
 	// 同时把整池越线时的无谓选号开销限制在常数级。
 	maxProfitVetoAttempts = 10
+	// maxDeferredSwitchBackoffs 单次请求内允许「换号前退避」的次数上限。
+	// 上游软限流（配额/频控类业务码）换号前短暂退避能显著提升自愈率，但大池里
+	// 每次都等会把 8 次账号保险丝叠加成十几秒延迟，因此只在前两次换号后退避。
+	maxDeferredSwitchBackoffs = 2
 )
 
 // profitVetoExhaustedMessage 是利润否决次数耗尽时返回给客户端的文案。
 // 语义上等同于「无可用账号」：候选账号都不满足分组的利润约束。
 const profitVetoExhaustedMessage = "No available accounts: all candidates rejected by group profit control"
+
+// compositeMaxAccountAttempts 统一账号池（composite 分组）下单次请求最多尝试的
+// 账号数，含首个账号。跨平台池里账号多、错误类型杂，需要一个与平台无关的常数
+// 保险丝（设计 §3），避免极端情况下把整池扫一遍。
+const compositeMaxAccountAttempts = 8
+
+// capAccountAttemptsForGroup 按分组收紧账号尝试上限：composite 统一池固定最多尝试
+// compositeMaxAccountAttempts 个账号（= 最大切换次数 7），其余分组沿用配置值。
+// 只收紧不放宽——不影响 openai/anthropic 等既有分组的 failover 口径，也不改
+// gateway.max_account_switches 全局默认值。
+func capAccountAttemptsForGroup(apiKey *service.APIKey, maxSwitches int) int {
+	if apiKey == nil || apiKey.Group == nil || apiKey.Group.Platform != service.PlatformComposite {
+		return maxSwitches
+	}
+	capped := compositeMaxAccountAttempts - 1
+	if maxSwitches > capped {
+		return capped
+	}
+	return maxSwitches
+}
 
 func sameAccountRetryDelayFor(failoverErr *service.UpstreamFailoverError, retryCount int) time.Duration {
 	if failoverErr == nil {
@@ -104,6 +128,9 @@ type FailoverState struct {
 	LastFailoverErr       *service.UpstreamFailoverError
 	ForceCacheBilling     bool
 	hasBoundSession       bool
+	// deferredSwitchBackoffs 本次请求已执行过几次「换号前退避」，上限
+	// maxDeferredSwitchBackoffs，防止大池把每次切换都叠加成秒级等待。
+	deferredSwitchBackoffs int
 
 	// profitVetoedAccountIDs 记录被分组利润门终检否决的账号，是 FailedAccountIDs
 	// 的子集。之所以单独维护：HandleSelectionExhausted 的 503 退避分支会清空
@@ -235,6 +262,24 @@ func (s *FailoverState) HandleFailoverError(
 		zap.Int("switch_count", s.SwitchCount),
 		zap.Int("max_switches", s.MaxSwitches),
 	)
+
+	// 上游软限流：换号前短暂退避（单次请求内最多 maxDeferredSwitchBackoffs 次），
+	// 避免立即撞进同一个限流窗口；超出预算则继续切换但不再等待。
+	if failoverErr.NextAccountRetryDelay > 0 {
+		if s.deferredSwitchBackoffs < maxDeferredSwitchBackoffs {
+			s.deferredSwitchBackoffs++
+			logger.FromContext(ctx).Warn("gateway.failover_switch_backoff",
+				zap.Int64("account_id", accountID),
+				zap.String("reason", string(failoverErr.Reason)),
+				zap.Duration("delay", failoverErr.NextAccountRetryDelay),
+				zap.Int("backoff_count", s.deferredSwitchBackoffs),
+				zap.Int("backoff_max", maxDeferredSwitchBackoffs),
+			)
+			if !sleepWithContext(ctx, failoverErr.NextAccountRetryDelay) {
+				return FailoverCanceled
+			}
+		}
+	}
 
 	// Antigravity 平台换号线性递增延时
 	if platform == service.PlatformAntigravity {

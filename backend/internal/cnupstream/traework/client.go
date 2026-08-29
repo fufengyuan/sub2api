@@ -16,12 +16,16 @@ import (
 
 var sessionDeadMarkers = []string{"login", "token 失效", "token invalid", "session", "unauthorized", "401"}
 
-// Classify 按 HTTP 状态码 + body 判定错误类别。
+// Classify 按「上游业务码优先、HTTP 状态码兜底」判定错误类别。
+//
+// 业务码优先：Trae SOLO 把配额/频控类错误放在响应体 code 里（HTTP 侧常是
+// 400）。只看状态码会让这类可恢复的间歇限流落进 ErrClient，要累计 3 次错误
+// 才冷却，账号因此被反复选中——分类口径见 provider.ClassifyBusinessCode。
 func Classify(status int, body string) provider.ErrKind {
-	lower := strings.ToLower(body)
-	if strings.Contains(body, `"code":1005`) || (strings.Contains(body, "1005") && strings.Contains(lower, "plan")) {
-		return provider.ErrHardCredit
+	if code, ok := provider.ExtractBusinessCode(body); ok {
+		return provider.ClassifyBusinessCode(code, body)
 	}
+	lower := strings.ToLower(body)
 	if status == http.StatusUnauthorized {
 		for _, m := range sessionDeadMarkers {
 			if strings.Contains(lower, strings.ToLower(m)) {

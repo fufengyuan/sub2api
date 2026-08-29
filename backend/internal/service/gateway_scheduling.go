@@ -10,7 +10,10 @@ import (
 	"log/slog"
 	mathrand "math/rand"
 	"sort"
+	"strconv"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
@@ -49,26 +52,9 @@ func (s *GatewayService) SelectAccountForModelWithExclusions(ctx context.Context
 		ctx = s.withGroupContext(ctx, group)
 		platform = group.Platform
 		if group.Platform == PlatformComposite {
-			decision, ok, err := s.resolveCompositeRouteDecision(ctx, group, requestedModel, CompositeRouteEndpointAny)
-			if err != nil {
-				return nil, err
-			}
-			if !ok {
-				return nil, fmt.Errorf("%w supporting model: %s (composite target platform unknown)", ErrNoAvailableAccounts, requestedModel)
-			}
-			// 多平台候选：选余额优先的平台；单目标保持原行为。
-			if cands := CompositeCandidatesFromContext(ctx); len(cands) > 1 {
-				p, _, _ := s.selectBestCandidatePlatform(ctx, groupID, cands)
-				if p == "" {
-					return nil, ErrNoAvailableAccounts
-				}
-				platform = p
-				ctx = WithResolvedTargetPlatform(ctx, p)
-			} else {
-				platform = decision.TargetPlatform
-				requestedModel = decision.UpstreamModel
-			}
-			ctx = WithCompositeRouteDecision(ctx, decision)
+			// composite 统一账号池：不再解析模型路由（主平台/fallback 概念已废弃），
+			// 平台占位为 composite，调度层拉组内全平台账号按账号级规则选号。
+			platform = PlatformComposite
 		}
 	} else {
 		// 无分组时只使用原生 anthropic 平台
@@ -93,6 +79,30 @@ func (s *GatewayService) SelectAccountForModelWithExclusions(ctx context.Context
 			return nil, err
 		}
 		return s.hydrateSelectedAccount(ctx, account)
+	}
+
+	// composite 统一账号池：账号级选号（优先级分层 + 同层余额降序轮转），
+	// legacy 无负载感知路径同样走统一池语义，平台不参与选号。
+	if platform == PlatformComposite {
+		accounts, _, err := s.listSchedulableAccounts(ctx, groupID, platform, false)
+		if err != nil {
+			return nil, err
+		}
+		if len(accounts) == 0 {
+			return nil, ErrNoAvailableAccounts
+		}
+		accounts = s.filterAccountsBySchedulingThreshold(ctx, accounts)
+		var stickyAccountID int64
+		if sessionHash != "" && s.cache != nil {
+			if id, err := s.cache.GetSessionAccountID(ctx, derefGroupID(groupID), sessionHash); err == nil {
+				stickyAccountID = id
+			}
+		}
+		result, err := s.selectCompositePoolAccount(ctx, groupID, platform, sessionHash, stickyAccountID, requestedModel, excludedIDs, accounts)
+		if err != nil {
+			return nil, err
+		}
+		return s.hydrateSelectedAccount(ctx, result.Account)
 	}
 
 	// antigravity 分组、强制平台模式或无分组使用单平台选择
@@ -221,24 +231,25 @@ func (s *GatewayService) SelectAccountWithLoadAwareness(ctx context.Context, gro
 		}
 	}
 
-	// composite 多平台 fallback：候选列表优先（按余额降序），逐平台尝试取健康账号。
-	routeCandidates := CompositeCandidatesFromContext(ctx)
+	// composite 统一账号池：平台占位为 PlatformComposite，调度层拉组内全平台
+	// 账号（SchedulerModeComposite），按账号级规则（优先级分层+同层轮转+冷却重试）
+	// 选号；模型路由/多平台 fallback 概念已废弃。
 	var platform string
-	var upstreamModel string
 	var accounts []Account
 	var useMixed bool
 	var hasForcePlatform bool
-	if len(routeCandidates) > 1 {
-		platform, upstreamModel, accounts = s.selectBestCandidatePlatform(ctx, groupID, routeCandidates)
-		if platform == "" {
+	if group != nil && group.Platform == PlatformComposite {
+		platform = PlatformComposite
+		accounts, useMixed, err = s.listSchedulableAccounts(ctx, groupID, platform, false)
+		if err != nil {
+			return nil, err
+		}
+		if len(accounts) == 0 {
 			return nil, ErrNoAvailableAccounts
 		}
-		// 选中平台后重建计费/模型 ctx：覆盖 middleware 里用主目标写入的单值，
-		// 使计费消费方读到实际选中的平台与上游模型。
-		ctx = WithResolvedTargetPlatform(ctx, platform)
-		if upstreamModel != "" {
-			ctx = WithResolvedUpstreamModel(ctx, upstreamModel)
-		}
+		// composite 统一账号池：账号级选号（粘性 → 优先级分层 → 同层余额降序
+		// 轮转 → 失败槽位抢不到换同层下一个），不再走平台路由/多平台 fallback。
+		return s.selectCompositePoolAccount(ctx, groupID, platform, sessionHash, stickyAccountID, requestedModel, excludedIDs, accounts)
 	} else {
 		platform, hasForcePlatform, err = s.resolvePlatform(ctx, groupID, group, requestedModel)
 		if err != nil {
@@ -955,14 +966,8 @@ func (s *GatewayService) resolvePlatform(ctx context.Context, groupID *int64, gr
 	}
 	if group != nil {
 		if group.Platform == PlatformComposite {
-			decision, ok, err := s.resolveCompositeRouteDecision(ctx, group, requestedModel, CompositeRouteEndpointAny)
-			if err != nil {
-				return "", false, err
-			}
-			if !ok {
-				return "", false, fmt.Errorf("%w supporting model: %s (composite target platform unknown)", ErrNoAvailableAccounts, requestedModel)
-			}
-			return decision.TargetPlatform, false, nil
+			// composite 统一账号池：无平台概念，占位为 composite（拉组内全平台账号）。
+			return PlatformComposite, false, nil
 		}
 		return group.Platform, false, nil
 	}
@@ -972,52 +977,227 @@ func (s *GatewayService) resolvePlatform(ctx context.Context, groupID *int64, gr
 			return "", false, err
 		}
 		if group.Platform == PlatformComposite {
-			decision, ok, err := s.resolveCompositeRouteDecision(ctx, group, requestedModel, CompositeRouteEndpointAny)
-			if err != nil {
-				return "", false, err
-			}
-			if !ok {
-				return "", false, fmt.Errorf("%w supporting model: %s (composite target platform unknown)", ErrNoAvailableAccounts, requestedModel)
-			}
-			return decision.TargetPlatform, false, nil
+			// composite 统一账号池：同上。
+			return PlatformComposite, false, nil
 		}
 		return group.Platform, false, nil
 	}
 	return PlatformAnthropic, false, nil
 }
 
-// selectBestCandidatePlatform 在 composite 多平台候选里，按平台内健康账号
-// creditsRemain 最大值降序，返回第一个有健康账号的平台（含该候选的上游模型）
-// 及该平台账号列表。无任何候选平台有健康账号时返回空 platform。
-func (s *GatewayService) selectBestCandidatePlatform(ctx context.Context, groupID *int64, candidates []CompositeRouteCandidate) (string, string, []Account) {
-	type scored struct {
-		candidate CompositeRouteCandidate
-		accounts  []Account
-		credits   int64
+// selectBestCandidatePlatform 已随 composite 多平台 fallback 一并废弃：
+// composite 分组改为统一账号池（SchedulerModeComposite），平台不再参与选号。
+
+// selectCompositePoolAccount 统一账号池选号（composite 分组专用，平台无关）：
+//  1. 粘性会话：绑定账号仍在池内且通过全部调度门时直接复用（含等待计划）。
+//  2. 候选过滤：排除列表 / 可调度 / 利润门 / 模型支持 / 模型限流 / 配额 /
+//     窗口费用 / RPM，与 Layer 2 的门槛集合一致，仅取消平台匹配。
+//  3. 优先级分层 → 同层余额降序：creditsRemain 未知视为最小值。逐个抢槽，
+//     抢不到（并发满）则换同层下一个账号（即余额降序轮转）；整个最高层
+//     抢不到后进入下一层。
+//  4. 全部候选槽位忙：Layer 3 兜底排队（按余额降序），由 handler 等待。
+//
+// 失败账号由 handler failover 循环加入排除集后重新进入本函数，即
+// 「失败重试本层下一个」；单请求最多尝试 8 个账号的保险丝由
+// gateway.max_account_switches 承载（handler 层生效）。
+func (s *GatewayService) selectCompositePoolAccount(
+	ctx context.Context,
+	groupID *int64,
+	platform string,
+	sessionHash string,
+	stickyAccountID int64,
+	requestedModel string,
+	excludedIDs map[int64]struct{},
+	accounts []Account,
+) (*AccountSelectionResult, error) {
+	cfg := s.schedulingConfig()
+	isExcluded := func(accountID int64) bool {
+		if excludedIDs == nil {
+			return false
+		}
+		_, excluded := excludedIDs[accountID]
+		return excluded
 	}
-	var picks []scored
-	for _, cand := range candidates {
-		if cand.Platform == "" {
-			continue
-		}
-		accounts, _, err := s.listSchedulableAccounts(ctx, groupID, cand.Platform, false)
-		if err != nil || len(accounts) == 0 {
-			continue
-		}
-		var max int64
-		for _, acc := range accounts {
-			if c, ok := accountCreditsRemain(acc); ok && c > max {
-				max = c
+
+	// ---------- 粘性会话优先 ----------
+	if sessionHash != "" && stickyAccountID > 0 && !isExcluded(stickyAccountID) {
+		for i := range accounts {
+			sticky := &accounts[i]
+			if sticky.ID != stickyAccountID {
+				continue
 			}
+			if !s.isAccountSchedulableForSelection(sticky) ||
+				!s.isGatewayAccountProfitEligible(ctx, sticky) ||
+				(requestedModel != "" && !s.isModelSupportedByAccountWithContext(ctx, sticky, requestedModel)) ||
+				!s.isAccountSchedulableForModelSelection(ctx, sticky, requestedModel) ||
+				!s.isAccountSchedulableForQuota(sticky) ||
+				!s.isAccountSchedulableForWindowCost(ctx, sticky, true) ||
+				!s.isAccountSchedulableForRPM(ctx, sticky, true) {
+				break
+			}
+			if result, err := s.tryAcquireAccountSlot(ctx, sticky.ID, sticky.Concurrency); err == nil && result.Acquired {
+				if !s.checkAndRegisterSession(ctx, sticky, sessionHash) {
+					result.ReleaseFunc()
+					break
+				}
+				slog.Debug("composite_pool_sticky_hit",
+					"account_id", sticky.ID,
+					"session", shortSessionHash(sessionHash))
+				return s.newSelectionResult(ctx, sticky, true, result.ReleaseFunc, nil)
+			}
+			// 槽位忙：短会话可等待；否则落回统一选号。
+			if waitingCount, _ := s.concurrencyService.GetAccountWaitingCount(ctx, sticky.ID); waitingCount < cfg.StickySessionMaxWaiting {
+				if s.checkAndRegisterSession(ctx, sticky, sessionHash) {
+					return s.newSelectionResult(ctx, sticky, false, nil, &AccountWaitPlan{
+						AccountID:      sticky.ID,
+						MaxConcurrency: sticky.Concurrency,
+						Timeout:        cfg.StickySessionWaitTimeout,
+						MaxWaiting:     cfg.StickySessionMaxWaiting,
+					})
+				}
+			}
+			break
 		}
-		picks = append(picks, scored{candidate: cand, accounts: accounts, credits: max})
 	}
-	if len(picks) == 0 {
-		return "", "", nil
+
+	// ---------- 候选过滤 ----------
+	candidates := make([]*Account, 0, len(accounts))
+	for i := range accounts {
+		acc := &accounts[i]
+		if isExcluded(acc.ID) {
+			continue
+		}
+		if !s.isAccountSchedulableForSelection(acc) {
+			continue
+		}
+		if !s.isGatewayAccountProfitEligible(ctx, acc) {
+			continue
+		}
+		if requestedModel != "" && !s.isModelSupportedByAccountWithContext(ctx, acc, requestedModel) {
+			continue
+		}
+		if !s.isAccountSchedulableForModelSelection(ctx, acc, requestedModel) {
+			continue
+		}
+		if !s.isAccountSchedulableForQuota(acc) {
+			continue
+		}
+		if !s.isAccountSchedulableForWindowCost(ctx, acc, false) {
+			continue
+		}
+		if !s.isAccountSchedulableForRPM(ctx, acc, false) {
+			continue
+		}
+		candidates = append(candidates, acc)
 	}
-	// 按余额降序稳定排序；余额相同保持候选顺序。
-	sort.SliceStable(picks, func(i, j int) bool { return picks[i].credits > picks[j].credits })
-	return picks[0].candidate.Platform, picks[0].candidate.UpstreamModel, picks[0].accounts
+	if len(candidates) == 0 {
+		return nil, ErrNoAvailableAccounts
+	}
+
+	// ---------- 优先级分层 + 同层余额降序轮转 ----------
+	ordered := rotateCompositePoolTiers(sortCompositePoolCandidates(candidates), derefGroupID(groupID))
+	for _, acc := range ordered {
+		result, err := s.tryAcquireAccountSlot(ctx, acc.ID, acc.Concurrency)
+		if err == nil && result.Acquired {
+			if !s.checkAndRegisterSession(ctx, acc, sessionHash) {
+				result.ReleaseFunc()
+				continue
+			}
+			if sessionHash != "" && s.cache != nil {
+				_ = s.bindGatewayStickySessionDuringSelection(ctx, groupID, sessionHash, acc.ID)
+			}
+			slog.Debug("composite_pool_selected",
+				"account_id", acc.ID,
+				"platform", acc.Platform,
+				"priority", acc.Priority,
+				"session", shortSessionHash(sessionHash))
+			return s.newSelectionResult(ctx, acc, true, result.ReleaseFunc, nil)
+		}
+	}
+
+	// ---------- Layer 3: 兜底排队 ----------
+	for _, acc := range ordered {
+		if !s.checkAndRegisterSession(ctx, acc, sessionHash) {
+			continue
+		}
+		return s.newSelectionResult(ctx, acc, false, nil, &AccountWaitPlan{
+			AccountID:      acc.ID,
+			MaxConcurrency: acc.Concurrency,
+			Timeout:        cfg.FallbackWaitTimeout,
+			MaxWaiting:     cfg.FallbackMaxWaiting,
+		})
+	}
+	return nil, ErrNoAvailableAccounts
+}
+
+// sortCompositePoolCandidates 统一池候选排序：优先级升序分层，同层内
+// creditsRemain 降序（无余额数据的账号视为 -1，排在有数据账号之后），
+// 余额相同保持稳定顺序。
+func sortCompositePoolCandidates(candidates []*Account) []*Account {
+	ordered := append([]*Account(nil), candidates...)
+	sort.SliceStable(ordered, func(i, j int) bool {
+		a, b := ordered[i], ordered[j]
+		if a.Priority != b.Priority {
+			return a.Priority < b.Priority
+		}
+		ca, oka := accountCreditsRemain(*a)
+		if !oka {
+			ca = -1
+		}
+		cb, okb := accountCreditsRemain(*b)
+		if !okb {
+			cb = -1
+		}
+		return ca > cb
+	})
+	return ordered
+}
+
+// compositePoolCursors 统一池「同层轮转」游标：键为 "groupID|priority"，值为
+// 自增计数（*atomic.Uint64）。进程内状态，多实例各自独立——轮转的目的是把同层
+// 流量摊开，局部偏移足够达成均摊，不需要跨实例严格一致。
+var compositePoolCursors sync.Map
+
+// compositePoolTierOffset 取某分组某优先级层的下一个轮转偏移。
+func compositePoolTierOffset(groupID, priority int64, tierLen int) int {
+	if tierLen <= 1 {
+		return 0
+	}
+	key := strconv.FormatInt(groupID, 10) + "|" + strconv.FormatInt(priority, 10)
+	counter, _ := compositePoolCursors.LoadOrStore(key, new(atomic.Uint64))
+	n := counter.(*atomic.Uint64).Add(1) - 1
+	return int(n % uint64(tierLen))
+}
+
+// rotateCompositePoolTiers 在「优先级升序 + 同层余额降序」的候选序列上，对每个
+// 优先级层做轮转：以该层游标为起始偏移回绕拼接，使同层多账号均摊流量，避免
+// 单账号高频撞上游限流（4008/4028）。
+//
+// 取舍：轮转意味着同层里余额较低的账号也会被排到前面。这是刻意的——余额差异
+// 由账号级冷却收敛（撞 1005 硬权益即长冷却出池），而限流是高频而非低余额问题，
+// 均摊才是这一层的实际收益。优先级分层本身不受影响：低层只在高层全部不可用
+// 时才被触及。
+func rotateCompositePoolTiers(ordered []*Account, groupID int64) []*Account {
+	if len(ordered) <= 1 {
+		return ordered
+	}
+	rotated := make([]*Account, 0, len(ordered))
+	for start := 0; start < len(ordered); {
+		end := start
+		for end < len(ordered) && ordered[end].Priority == ordered[start].Priority {
+			end++
+		}
+		tier := ordered[start:end]
+		offset := compositePoolTierOffset(groupID, int64(tier[0].Priority), len(tier))
+		if offset > 0 {
+			rotated = append(rotated, tier[offset:]...)
+			rotated = append(rotated, tier[:offset]...)
+		} else {
+			rotated = append(rotated, tier...)
+		}
+		start = end
+	}
+	return rotated
 }
 
 // accountCreditsRemain 读取账号 credentials.creditsRemain（int64/float64 兼容）。
@@ -1111,6 +1291,28 @@ func (s *GatewayService) listSchedulableAccounts(ctx context.Context, groupID *i
 
 	var accounts []Account
 	var err error
+	// composite 统一账号池：非 snapshot 路径同样拉组内全平台账号，与
+	// SchedulerModeComposite 的 DB 查询语义保持一致。
+	if platform == PlatformComposite {
+		if (s.cfg != nil && s.cfg.RunMode == config.RunModeSimple) || groupID == nil {
+			accounts, err = s.accountRepo.ListSchedulable(ctx)
+		} else {
+			accounts, err = s.accountRepo.ListSchedulableByGroupID(ctx, *groupID)
+		}
+		if err != nil {
+			slog.Debug("account_scheduling_list_failed",
+				"group_id", derefGroupID(groupID),
+				"platform", platform,
+				"error", err)
+			return nil, false, err
+		}
+		slog.Debug("account_scheduling_list_composite",
+			"group_id", derefGroupID(groupID),
+			"platform", platform,
+			"count", len(accounts))
+		return s.filterAccountsBySchedulingThreshold(ctx, accounts), false, nil
+	}
+
 	if s.cfg != nil && s.cfg.RunMode == config.RunModeSimple {
 		accounts, err = s.accountRepo.ListSchedulableByPlatform(ctx, platform)
 	} else if groupID != nil {
@@ -1162,6 +1364,10 @@ func (s *GatewayService) IsSingleAntigravityAccountGroup(ctx context.Context, gr
 func (s *GatewayService) isAccountAllowedForPlatform(account *Account, platform string, useMixed bool) bool {
 	if account == nil {
 		return false
+	}
+	// composite 统一账号池：平台只是账号属性，全部放行（跨平台池选号）。
+	if platform == PlatformComposite {
+		return true
 	}
 	if useMixed {
 		if account.Platform == platform {

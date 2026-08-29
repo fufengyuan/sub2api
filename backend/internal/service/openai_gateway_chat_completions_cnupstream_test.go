@@ -10,6 +10,10 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/Wei-Shaw/sub2api/internal/cnupstream/provider"
+	"github.com/Wei-Shaw/sub2api/internal/cnupstream/traework"
 
 	"github.com/gin-gonic/gin"
 )
@@ -18,13 +22,13 @@ import (
 func TestOpenAIForwardResultToForwardResult(t *testing.T) {
 	firstTokenMs := 123
 	or := &OpenAIForwardResult{
-		RequestID:    "req-1",
-		Model:        "glm-5.3",
-		BillingModel: "deepseek-v4-flash",
+		RequestID:     "req-1",
+		Model:         "glm-5.3",
+		BillingModel:  "deepseek-v4-flash",
 		UpstreamModel: "glm-5.3",
-		Usage: OpenAIUsage{InputTokens: 12, OutputTokens: 8, CacheReadInputTokens: 3},
-		Stream:       true,
-		FirstTokenMs: &firstTokenMs,
+		Usage:         OpenAIUsage{InputTokens: 12, OutputTokens: 8, CacheReadInputTokens: 3},
+		Stream:        true,
+		FirstTokenMs:  &firstTokenMs,
 	}
 	fr := OpenAIForwardResultToForwardResult(or)
 	if fr == nil {
@@ -80,15 +84,27 @@ func newCnGatewaySvc(fakeFn cnChatStreamFn) *OpenAIGatewayService {
 	}
 }
 
+// cnTarget 构造注入用的假上游目标（可选携带 report 回调便于断言冷却回灌）。
+func cnTarget(sse string, report func(error)) *CnChatTarget {
+	return &CnChatTarget{
+		RC:     io.NopCloser(strings.NewReader(sse)),
+		Status: http.StatusOK,
+		report: report,
+	}
+}
+
 func TestForwardCnUpstreamChatCompletionsStreamWithUsage(t *testing.T) {
-	svc := newCnGatewaySvc(func(platform string, body []byte) (io.ReadCloser, int, []byte, error) {
+	svc := newCnGatewaySvc(func(platform string, accountID int64, _ []byte) (*CnChatTarget, error) {
 		if platform != PlatformWorkBuddy {
 			t.Fatalf("platform=%q", platform)
 		}
-		return io.NopCloser(strings.NewReader(cnUpstreamSSEFixture)), 200, nil, nil
+		if accountID != 77 {
+			t.Fatalf("accountID=%d, want 77（统一池选中账号必须透传到取号）", accountID)
+		}
+		return cnTarget(cnUpstreamSSEFixture, nil), nil
 	})
 
-	rec, res, err := cnGatewayForward(t, svc, &Account{Platform: PlatformWorkBuddy},
+	rec, res, err := cnGatewayForward(t, svc, &Account{ID: 77, Platform: PlatformWorkBuddy},
 		[]byte(`{"model":"glm-5.2","stream":true,"messages":[]}`))
 	if err != nil {
 		t.Fatalf("forward: %v", err)
@@ -115,8 +131,8 @@ func TestForwardCnUpstreamChatCompletionsStreamWithUsage(t *testing.T) {
 }
 
 func TestForwardCnUpstreamChatCompletionsNonStreamAggregate(t *testing.T) {
-	svc := newCnGatewaySvc(func(_ string, _ []byte) (io.ReadCloser, int, []byte, error) {
-		return io.NopCloser(strings.NewReader(cnUpstreamSSEFixture)), 200, nil, nil
+	svc := newCnGatewaySvc(func(_ string, _ int64, _ []byte) (*CnChatTarget, error) {
+		return cnTarget(cnUpstreamSSEFixture, nil), nil
 	})
 
 	rec, res, err := cnGatewayForward(t, svc, &Account{Platform: PlatformWorkBuddy},
@@ -145,8 +161,8 @@ func TestForwardCnUpstreamChatCompletionsNonStreamAggregate(t *testing.T) {
 }
 
 func TestForwardCnUpstreamChatCompletionsUpstreamHTTPError(t *testing.T) {
-	svc := newCnGatewaySvc(func(_ string, _ []byte) (io.ReadCloser, int, []byte, error) {
-		return nil, http.StatusServiceUnavailable, []byte("upstream down"), nil
+	svc := newCnGatewaySvc(func(_ string, _ int64, _ []byte) (*CnChatTarget, error) {
+		return &CnChatTarget{Status: http.StatusServiceUnavailable, Body: []byte("upstream down")}, nil
 	})
 
 	rec, _, err := cnGatewayForward(t, svc, &Account{Platform: PlatformWorkBuddy},
@@ -154,26 +170,48 @@ func TestForwardCnUpstreamChatCompletionsUpstreamHTTPError(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error for upstream 503")
 	}
-	if !strings.Contains(err.Error(), "http 503") {
-		t.Errorf("err=%v", err)
+	// 未写出响应前统一包装为 failover 错误，原始上游细节保留在 Reason。
+	var failoverErr *UpstreamFailoverError
+	if !errors.As(err, &failoverErr) {
+		t.Fatalf("want UpstreamFailoverError, got %T: %v", err, err)
+	}
+	if !strings.Contains(string(failoverErr.Reason), "http 503") {
+		t.Errorf("reason=%v, want 保留 http 503 上游细节", failoverErr.Reason)
+	}
+	if failoverErr.Scope != GatewayFailureScopeRequest {
+		t.Errorf("scope=%v, want request（传输层失败不惩罚账号健康度）", failoverErr.Scope)
 	}
 	if strings.Contains(rec.Body.String(), "upstream down") {
 		t.Errorf("should not have written upstream body: %q", rec.Body.String())
 	}
 }
 
-func TestForwardCnUpstreamChatCompletionsAllAccountsUnavailable(t *testing.T) {
-	svc := newCnGatewaySvc(func(_ string, _ []byte) (io.ReadCloser, int, []byte, error) {
-		return nil, 0, nil, errors.New("fake: all accounts unavailable")
+// TestForwardCnUpstreamChatCompletionsPoolExhaustedIs429 整池冷却时按 429 + Retry-After
+// 交给 failover，而不是当成可立即重试的 502。
+func TestForwardCnUpstreamChatCompletionsPoolExhaustedIs429(t *testing.T) {
+	svc := newCnGatewaySvc(func(platform string, _ int64, _ []byte) (*CnChatTarget, error) {
+		return nil, &CnPoolExhaustedError{Platform: platform, RetryAfter: 45 * time.Second, Accounts: 2}
 	})
-	if _, _, err := cnGatewayForward(t, svc, &Account{Platform: PlatformWorkBuddy},
-		[]byte(`{"model":"glm-5.2","stream":true,"messages":[]}`)); err == nil {
-		t.Fatal("expected error when all accounts unavailable")
+
+	_, _, err := cnGatewayForward(t, svc, &Account{Platform: PlatformWorkBuddy},
+		[]byte(`{"model":"glm-5.2","stream":true,"messages":[]}`))
+	if err == nil {
+		t.Fatal("expected error when whole pool cooling")
+	}
+	var failoverErr *UpstreamFailoverError
+	if !errors.As(err, &failoverErr) {
+		t.Fatalf("want UpstreamFailoverError, got %T: %v", err, err)
+	}
+	if failoverErr.StatusCode != http.StatusTooManyRequests {
+		t.Errorf("status=%d, want 429", failoverErr.StatusCode)
+	}
+	if got := failoverErr.ResponseHeaders.Get("Retry-After"); got != "45" {
+		t.Errorf("Retry-After=%q, want 45", got)
 	}
 }
 
 func TestForwardCnUpstreamChatCompletionsNotWired(t *testing.T) {
-	// cnUpstream 与 cnChatStream 均为 nil，命中第 45 行守卫。
+	// cnUpstream 与 cnChatStream 均为 nil，命中「service not wired」守卫。
 	_, _, err := cnGatewayForward(t, &OpenAIGatewayService{}, &Account{Platform: PlatformWorkBuddy},
 		[]byte(`{"model":"glm-5.2","stream":true,"messages":[]}`))
 	if err == nil || !strings.Contains(err.Error(), "not wired") {
@@ -181,61 +219,18 @@ func TestForwardCnUpstreamChatCompletionsNotWired(t *testing.T) {
 	}
 }
 
-// TestForwardCnUpstreamCrossPlatformFallback 验证 composite 组下，主平台池内全部失败时
-// 会按候选平台顺序切到下一个国产渠道平台（同一请求跨平台 fallback）。
-func TestForwardCnUpstreamCrossPlatformFallback(t *testing.T) {
-	svc := newCnGatewaySvc(func(platform string, _ []byte) (io.ReadCloser, int, []byte, error) {
-		if platform == PlatformTraeWork {
-			// 主平台全部账号不可用
-			return nil, 0, nil, errors.New("fake: all traework accounts unavailable")
-		}
-		if platform == PlatformWorkBuddy {
-			// 候选平台票足、健康，返回正常 SSE
-			return io.NopCloser(strings.NewReader(cnUpstreamSSEFixture)), 200, nil, nil
-		}
-		t.Fatalf("unexpected platform=%q", platform)
-		return nil, 0, nil, errors.New("unexpected platform")
-	})
-
-	// primary 为 traework（失败），composite 候选把 workbuddy 作为后备。
-	ctx := WithCompositeCandidates(context.Background(), []CompositeRouteCandidate{
-		{Platform: PlatformTraeWork},
-		{Platform: PlatformWorkBuddy},
-	})
-
-	gin.SetMode(gin.TestMode)
-	rec := httptest.NewRecorder()
-	c, _ := gin.CreateTestContext(rec)
-	c.Request = httptest.NewRequest("POST", "/v1/chat/completions", nil)
-
-	res, err := svc.forwardCnUpstreamChatCompletions(ctx, c, &Account{Platform: PlatformTraeWork},
-		[]byte(`{"model":"glm-5.2","stream":true,"messages":[]}`))
-	if err != nil {
-		t.Fatalf("forward should fallback to workbuddy, got err: %v", err)
-	}
-	if res == nil {
-		t.Fatal("expected non-nil result")
-	}
-	// 从候选 workbuddy 成功返回 usage 应被抽取计费。
-	if res.Usage.InputTokens != 12 || res.Usage.OutputTokens != 8 {
-		t.Errorf("usage=%+v", res.Usage)
-	}
-	body := rec.Body.String()
-	if !strings.Contains(body, "你好") {
-		t.Errorf("stream output missing fallback content: %q", body)
-	}
-}
-
-// TestForwardCnUpstreamFallbackAllPlatformsUnavailable 验证所有候选平台都失败时返回错误。
-func TestForwardCnUpstreamFallbackAllPlatformsUnavailable(t *testing.T) {
-	svc := newCnGatewaySvc(func(platform string, _ []byte) (io.ReadCloser, int, []byte, error) {
-		return nil, 0, nil, fmt.Errorf("fake: all %s accounts unavailable", platform)
+// TestForwardCnUpstreamNoCrossPlatformFallback 统一账号池后不再做跨平台 fallback：
+// 只按选中账号的平台执行一次转发，失败包装成 failover 错误交给 handler 换号。
+func TestForwardCnUpstreamNoCrossPlatformFallback(t *testing.T) {
+	var calls []string
+	svc := newCnGatewaySvc(func(platform string, _ int64, _ []byte) (*CnChatTarget, error) {
+		calls = append(calls, platform)
+		return nil, fmt.Errorf("fake: all %s accounts unavailable", platform)
 	})
 
 	ctx := WithCompositeCandidates(context.Background(), []CompositeRouteCandidate{
 		{Platform: PlatformTraeWork},
 		{Platform: PlatformWorkBuddy},
-		{Platform: PlatformQoder},
 	})
 
 	gin.SetMode(gin.TestMode)
@@ -246,10 +241,17 @@ func TestForwardCnUpstreamFallbackAllPlatformsUnavailable(t *testing.T) {
 	_, err := svc.forwardCnUpstreamChatCompletions(ctx, c, &Account{Platform: PlatformTraeWork},
 		[]byte(`{"model":"glm-5.2","stream":true,"messages":[]}`))
 	if err == nil {
-		t.Fatal("expected error when all candidate platforms unavailable")
+		t.Fatal("expected failover error")
 	}
-	if !strings.Contains(err.Error(), "unavailable") {
-		t.Errorf("err should reference unavailability, got: %v", err)
+	if len(calls) != 1 || calls[0] != PlatformTraeWork {
+		t.Fatalf("calls=%v, want 仅选中平台 traework 一次（候选平台不再自动尝试）", calls)
+	}
+	var failoverErr *UpstreamFailoverError
+	if !errors.As(err, &failoverErr) {
+		t.Fatalf("want UpstreamFailoverError, got %T", err)
+	}
+	if rec.Body.Len() != 0 {
+		t.Errorf("未写出响应前不应写 body: %q", rec.Body.String())
 	}
 }
 
@@ -257,25 +259,22 @@ func TestForwardCnUpstreamFallbackAllPlatformsUnavailable(t *testing.T) {
 const soloErrorOnlySSE string = "event:metadata\ndata:{}\n\n" +
 	"event:error\ndata:{\"code\":4008,\"message\":\"Your requests have exceeded the quota.\"}\n\n"
 
-// TestForwardCnUpstreamStreamErrorBeforeOutputFallsBack 验证：主平台流内未产出内容即返回业务错误
-//（间歇 4008）时，会切到下一个候选平台，而不是把错误文本回给客户端。
-func TestForwardCnUpstreamStreamErrorBeforeOutputFallsBack(t *testing.T) {
-	svc := newCnGatewaySvc(func(platform string, _ []byte) (io.ReadCloser, int, []byte, error) {
-		if platform == PlatformTraeWork {
-			// 主平台未产出内容即 4008
-			return io.NopCloser(strings.NewReader(soloErrorOnlySSE)), 200, nil, nil
-		}
-		if platform == PlatformWorkBuddy {
-			// 候选平台健康，返回正常 SSE
-			return io.NopCloser(strings.NewReader(cnUpstreamSSEFixture)), 200, nil, nil
-		}
-		t.Fatalf("unexpected platform=%q", platform)
-		return nil, 0, nil, errors.New("unexpected platform")
-	})
+// soloMidQuotaErrorSSE 已产出一段内容后才遇到 4028 频控：流要正常收尾（不再返回错误），
+// 但账号仍必须被回灌冷却，否则下一轮会被「积分最高」再次选中。
+const soloMidQuotaErrorSSE string = "event:metadata\ndata:{}\n\n" +
+	"event:output\ndata:{\"response\":\"前半\"}\n\n" +
+	"event:error\ndata:{\"code\":4028,\"message\":\"your requests are too frequent\"}\n\n"
 
-	ctx := WithCompositeCandidates(context.Background(), []CompositeRouteCandidate{
-		{Platform: PlatformTraeWork},
-		{Platform: PlatformWorkBuddy},
+// TestForwardCnUpstreamStreamErrorBeforeOutputReportsAndFailsover 验证：流内未产出内容
+// 即业务错误时，① 不向客户端泄漏错误文本；② 按软限流回灌账号冷却（Report）；
+// ③ 返回带换号退避的 failover 错误，由 handler 换下一个账号。
+func TestForwardCnUpstreamStreamErrorBeforeOutputReportsAndFailsover(t *testing.T) {
+	var reported error
+	svc := newCnGatewaySvc(func(platform string, _ int64, _ []byte) (*CnChatTarget, error) {
+		if platform != PlatformTraeWork {
+			t.Fatalf("unexpected platform=%q", platform)
+		}
+		return cnTarget(soloErrorOnlySSE, func(err error) { reported = err }), nil
 	})
 
 	gin.SetMode(gin.TestMode)
@@ -283,24 +282,85 @@ func TestForwardCnUpstreamStreamErrorBeforeOutputFallsBack(t *testing.T) {
 	c, _ := gin.CreateTestContext(rec)
 	c.Request = httptest.NewRequest("POST", "/v1/chat/completions", nil)
 
-	res, err := svc.forwardCnUpstreamChatCompletions(ctx, c, &Account{Platform: PlatformTraeWork},
+	_, err := svc.forwardCnUpstreamChatCompletions(context.Background(), c, &Account{Platform: PlatformTraeWork},
+		[]byte(`{"model":"glm-5.2","stream":true,"messages":[]}`))
+	if err == nil {
+		t.Fatal("expected failover error on pre-output business error")
+	}
+	var failoverErr *UpstreamFailoverError
+	if !errors.As(err, &failoverErr) {
+		t.Fatalf("want UpstreamFailoverError, got %T", err)
+	}
+	if failoverErr.NextAccountRetryDelay != cnSoftRateSwitchBackoff {
+		t.Errorf("backoff=%v, want %v（软限流换号前退避）", failoverErr.NextAccountRetryDelay, cnSoftRateSwitchBackoff)
+	}
+	if failoverErr.Scope != GatewayFailureScopeAccount {
+		t.Errorf("scope=%v, want account", failoverErr.Scope)
+	}
+	if reported == nil {
+		t.Fatal("必须把流内业务错误回灌上游池（Report），否则限流账号会被反复选中")
+	}
+	var soloErr *traework.SOLOStreamError
+	if !errors.As(reported, &soloErr) || soloErr.Code != 4008 {
+		t.Errorf("reported=%v, want solo 4008", reported)
+	}
+	if strings.Contains(rec.Body.String(), "exceeded the quota") || strings.Contains(rec.Body.String(), "solo error") {
+		t.Errorf("should not leak solo business error to client: %q", rec.Body.String())
+	}
+}
+
+// TestForwardCnUpstreamMidStreamErrorCoolsAccount 已产出内容的流内业务错误：客户端已拿到
+// 前半段并正常收尾（不报错），但账号仍须被回灌冷却。
+func TestForwardCnUpstreamMidStreamErrorCoolsAccount(t *testing.T) {
+	var reported error
+	svc := newCnGatewaySvc(func(_ string, _ int64, _ []byte) (*CnChatTarget, error) {
+		return cnTarget(soloMidQuotaErrorSSE, func(err error) { reported = err }), nil
+	})
+
+	rec, res, err := cnGatewayForward(t, svc, &Account{Platform: PlatformTraeWork},
 		[]byte(`{"model":"glm-5.2","stream":true,"messages":[]}`))
 	if err != nil {
-		t.Fatalf("forward should fallback to workbuddy on pre-output business error, got err: %v", err)
+		t.Fatalf("已产出内容时不应报错: %v", err)
 	}
 	if res == nil {
 		t.Fatal("expected non-nil result")
 	}
-	// 候选 workbuddy 正常返回 usage 计费
-	if res.Usage.InputTokens != 12 || res.Usage.OutputTokens != 8 {
-		t.Errorf("usage=%+v", res.Usage)
+	if reported == nil {
+		t.Fatal("mid-stream 业务错误也必须回灌冷却")
 	}
-	// 客户端不应收到 4008 错误文本（已 fallback 到 workbuddy）
-	body := rec.Body.String()
-	if strings.Contains(body, "exceeded the quota") || strings.Contains(body, "solo error") {
-		t.Errorf("should not leak solo business error to client after fallback: %q", body)
+	var soloErr *traework.SOLOStreamError
+	if !errors.As(reported, &soloErr) || soloErr.Kind() != provider.ErrSoftRate {
+		t.Errorf("reported=%v, want solo 4028 soft rate", reported)
 	}
-	if !strings.Contains(body, "你好") {
-		t.Errorf("stream output missing fallback content: %q", body)
+	if !strings.Contains(rec.Body.String(), "前半") {
+		t.Errorf("已产出内容需保留: %q", rec.Body.String())
+	}
+}
+
+// TestForwardCnUpstreamHardCreditErrorHasNoBackoff 1005 权益不足是账号级硬错误：
+// 标记账号作用域但不做换号退避（等待不会让权益恢复）。
+func TestForwardCnUpstreamHardCreditErrorHasNoBackoff(t *testing.T) {
+	err := cnUpstreamFailoverError(&Account{Platform: PlatformTraeWork},
+		&traework.StreamBeforeOutputError{Se: &traework.SOLOStreamError{Code: 1005, Msg: "plan expired"}})
+	if err.StatusCode != http.StatusBadGateway {
+		t.Errorf("status=%d, want 502", err.StatusCode)
+	}
+	if err.Scope != GatewayFailureScopeAccount {
+		t.Errorf("scope=%v, want account", err.Scope)
+	}
+	if err.NextAccountRetryDelay != 0 {
+		t.Errorf("backoff=%v, want 0（硬权益不等）", err.NextAccountRetryDelay)
+	}
+}
+
+// TestCnUpstreamFailoverErrorSoftRateFromBody HTTP 4xx + JSON 业务码（4028）也按软限流退避。
+func TestCnUpstreamFailoverErrorSoftRateFromBody(t *testing.T) {
+	err := cnUpstreamFailoverError(&Account{Platform: PlatformTraeWork},
+		fmt.Errorf(`cnupstream: %s upstream error (http 400): {"code":4028,"message":"Your requests have exceeded the quota."}`, PlatformTraeWork))
+	if err.Scope != GatewayFailureScopeAccount {
+		t.Errorf("scope=%v, want account", err.Scope)
+	}
+	if err.NextAccountRetryDelay != cnSoftRateSwitchBackoff {
+		t.Errorf("backoff=%v, want %v", err.NextAccountRetryDelay, cnSoftRateSwitchBackoff)
 	}
 }

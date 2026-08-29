@@ -59,12 +59,10 @@ func (e *SOLOStreamError) Error() string {
 	return fmt.Sprintf("solo error code=%d msg=%s", e.Code, e.Msg)
 }
 
-// Kind 将 SSE 流内错误分类。1005 → provider.ErrHardCredit；其余归 provider.ErrClient。
+// Kind 将 SSE 流内错误分类。委托三渠道共用的业务码表：1005 → ErrHardCredit，
+// 4008/4028 等间歇配额/频控 → ErrSoftRate（短冷却 + 换号），其余 → ErrClient。
 func (e *SOLOStreamError) Kind() provider.ErrKind {
-	if e.Code == 1005 {
-		return provider.ErrHardCredit
-	}
-	return provider.ErrClient
+	return provider.ClassifyBusinessCode(e.Code, e.Msg)
 }
 
 // ParseSOLOLine 解析一条事件（eventName 为 event 行值，dataLine 为 data 行值）。
@@ -306,9 +304,34 @@ func sortInts(a []int) {
 }
 
 // ErrStreamErrorBeforeOutput 表示上游 SSE 流在尚未产出任何内容时就返回了业务错误
-//（如 4008 间歇配额超限 / 1005 权益不足）。流式转换层据此不写错误 chunk，交由
-// 上层在未写出响应时切到下一个候选平台/账号。
+//（如 4008/4028 间歇配额超限 / 1005 权益不足）。流式转换层据此不写错误 chunk，交由
+// 上层在未写出响应时换账号重试。
 var ErrStreamErrorBeforeOutput = errors.New("cnupstream: upstream business error before any output")
+
+// StreamBeforeOutputError 在 sentinel 之上携带具体的上游业务错误，供上层按错误码
+// 分类冷却账号。通过 Unwrap 保留 errors.Is(err, ErrStreamErrorBeforeOutput) 兼容。
+type StreamBeforeOutputError struct {
+	Se *SOLOStreamError
+}
+
+func (e *StreamBeforeOutputError) Error() string {
+	if e == nil || e.Se == nil {
+		return ErrStreamErrorBeforeOutput.Error()
+	}
+	return e.Se.Error()
+}
+
+// Unwrap 同时暴露旧 sentinel 与被包装的业务错误：errors.Is(err, ErrStreamErrorBeforeOutput)
+// 保持兼容，errors.As(err, &*SOLOStreamError{}) 可取到上游码与文案用于分类冷却。
+func (e *StreamBeforeOutputError) Unwrap() []error {
+	if e == nil {
+		return []error{ErrStreamErrorBeforeOutput}
+	}
+	if e.Se == nil {
+		return []error{ErrStreamErrorBeforeOutput}
+	}
+	return []error{ErrStreamErrorBeforeOutput, e.Se}
+}
 
 // Stream 流式转换：SOLO SSE → OpenAI SSE chunk，每 chunk flush，保证至少一个 [DONE]。
 // 调用方必须先设置过 status 200；本函数自设 SSE headers。
@@ -435,7 +458,7 @@ func streamOpts(w http.ResponseWriter, r io.Reader, onErr func(*SOLOStreamError)
 				// 不写 [DONE]，直接返回 sentinel 错误让上层在未写出响应时切平台）。
 				if !sawOutput {
 					if onErr != nil && onErr(se) {
-						return ErrStreamErrorBeforeOutput
+						return &StreamBeforeOutputError{Se: se}
 					}
 				} else {
 					if onErr != nil {

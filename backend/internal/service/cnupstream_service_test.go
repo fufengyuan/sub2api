@@ -12,6 +12,7 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/cnupstream/auth"
 	"github.com/Wei-Shaw/sub2api/internal/cnupstream/provider"
 	"github.com/Wei-Shaw/sub2api/internal/cnupstream/scheduler"
+	"github.com/Wei-Shaw/sub2api/internal/cnupstream/traework"
 )
 
 // fakeCnRepo 账号仓储切片 stub（ListByPlatform + GetByID + Update）。
@@ -44,7 +45,7 @@ func (f *fakeCnRepo) Update(ctx context.Context, account *Account) error {
 	return nil
 }
 
-// fakeCnUpstream provider.Upstream stub：仅积分/签到/模型三组方法可配置。
+// fakeCnUpstream provider.Upstream stub：仅积分/签到/模型/Chat 四组方法可配置。
 type fakeCnUpstream struct {
 	remain      int64
 	remainErr   error
@@ -54,10 +55,17 @@ type fakeCnUpstream struct {
 	models      []provider.ModelInfo
 	modelsErr   error
 	checkinCall int
+	// chatFn 覆盖 ChatStream 行为；chatCalls 按调用顺序记录被选中的账号 ID。
+	chatFn    func(a *auth.Auth, body []byte) (io.ReadCloser, int, []byte, error)
+	chatCalls []int64
 }
 
 func (f *fakeCnUpstream) RefreshToken(a *auth.Auth) error { return nil }
 func (f *fakeCnUpstream) ChatStream(a *auth.Auth, body []byte) (io.ReadCloser, int, []byte, error) {
+	f.chatCalls = append(f.chatCalls, a.AccountID)
+	if f.chatFn != nil {
+		return f.chatFn(a, body)
+	}
 	return nil, 0, nil, errors.New("not implemented")
 }
 func (f *fakeCnUpstream) FetchModels(a *auth.Auth) ([]provider.ModelInfo, error) {
@@ -76,8 +84,10 @@ func (f *fakeCnUpstream) DailyCheckin(a *auth.Auth) error {
 	f.checkinCall++
 	return f.checkinErr
 }
+
+// Classify 委托 traework 实现，使测试覆盖「业务码 → 冷却分类」的真实链路。
 func (f *fakeCnUpstream) Classify(status int, body string) provider.ErrKind {
-	return provider.ErrNone
+	return traework.Classify(status, body)
 }
 func (f *fakeCnUpstream) Stream(w http.ResponseWriter, r io.Reader) error { return nil }
 func (f *fakeCnUpstream) Aggregate(r io.Reader) (map[string]any, error) {
