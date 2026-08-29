@@ -10,9 +10,9 @@ import (
 )
 
 const (
-	SchedulerModeSingle    = "single"
-	SchedulerModeMixed     = "mixed"
-	SchedulerModeForced    = "forced"
+	SchedulerModeSingle = "single"
+	SchedulerModeMixed  = "mixed"
+	SchedulerModeForced = "forced"
 	// SchedulerModeComposite 统一账号池模式：composite 分组不再有平台概念，
 	// 拉取组内关联的全部平台账号，由账号级选号规则（优先级分层 + 同层余额
 	// 降序轮转 + 失败冷却重试）在跨平台池内选号。

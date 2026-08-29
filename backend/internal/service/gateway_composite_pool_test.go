@@ -186,23 +186,24 @@ func TestSelectAccountForModelWithExclusions_CompositeUnifiedPool(t *testing.T) 
 		"跨平台池内任一账号都可被选中，got %s", acc.Platform)
 }
 
-// 统一池不再读取 composite 路由：即使 ctx 里带着旧候选平台列表，也只按选中账号
-// 的平台语义处理（此处表现为不再改写请求模型名，账号候选来自组内全平台）。
-func TestSelectAccountWithLoadAwareness_CompositeIgnoresRouteCandidates(t *testing.T) {
+// 统一池按端点协议族过滤：Anthropic 协议入口没有三渠道的桥接实现，
+// 组内只有三渠道账号时应报「无可用账号」，而不是把请求交给一个必然失败的转发。
+func TestSelectAccountWithLoadAwareness_CompositeProtocolFamilyFilter(t *testing.T) {
 	groupID := int64(36)
 	accounts := []Account{
 		compositePoolAccount(1, PlatformWorkBuddy, 1, 100),
+		compositePoolAccount(2, PlatformTraeWork, 1, 100),
 	}
 	svc := newCompositePoolSvc(t, groupID, accounts)
-	ctx := WithCompositeCandidates(context.Background(), []CompositeRouteCandidate{
-		{Platform: PlatformTraeWork, UpstreamModel: "DeepSeek-V4-Flash"},
-		{Platform: PlatformWorkBuddy, UpstreamModel: "deepseek-v4-flash"},
-	})
+	filteredCtx := WithCompositePoolPlatformFilter(context.Background(), CompositeAnthropicNativePlatforms...)
 
-	result, err := svc.SelectAccountWithLoadAwareness(ctx, &groupID, "", "any-model", nil, "", int64(0))
+	_, err := svc.SelectAccountWithLoadAwareness(filteredCtx, &groupID, "", "any-model", nil, "", int64(0))
+	require.ErrorIs(t, err, ErrNoAvailableAccounts, "三渠道账号不得被 Anthropic 协议入口选中")
+
+	// 同一池在 OpenAI 协议通用入口（无过滤）下正常选号。
+	result, err := svc.SelectAccountWithLoadAwareness(context.Background(), &groupID, "", "any-model", nil, "", int64(0))
 	require.NoError(t, err)
-	require.Equal(t, int64(1), result.Account.ID)
-	require.Equal(t, PlatformWorkBuddy, result.Account.Platform)
+	require.NotNil(t, result.Account)
 	if result.ReleaseFunc != nil {
 		result.ReleaseFunc()
 	}

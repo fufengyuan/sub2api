@@ -776,13 +776,15 @@ type GatewayService struct {
 	userGroupRateSF       singleflight.Group
 	modelsListCache       *gocache.Cache
 	modelsListCacheTTL    time.Duration
+	// poolPlatformsCache 缓存「组内可调度账号的平台集合」，供 composite 统一池的
+	// 入口分派使用（短 TTL，见 compositePoolPlatformsCacheTTL）。
+	poolPlatformsCache    *gocache.Cache
 	settingService        *SettingService
 	responseHeaderFilter  *responseheaders.CompiledHeaderFilter
 	debugModelRouting     atomic.Bool
 	debugClaudeMimic      atomic.Bool
 	channelService        *ChannelService
 	resolver              *ModelPricingResolver
-	compositeResolver     *CompositeRouteResolver
 	debugGatewayBodyFile  atomic.Pointer[os.File] // non-nil when SUB2API_DEBUG_GATEWAY_BODY is set
 	tlsFPProfileService   *TLSFingerprintProfileService
 	balanceNotifyService  *BalanceNotifyService
@@ -816,7 +818,6 @@ func NewGatewayService(
 	tlsFPProfileService *TLSFingerprintProfileService,
 	channelService *ChannelService,
 	resolver *ModelPricingResolver,
-	compositeResolver *CompositeRouteResolver,
 	balanceNotifyService *BalanceNotifyService,
 	userPlatformQuotaRepo UserPlatformQuotaRepository,
 ) *GatewayService {
@@ -849,11 +850,11 @@ func NewGatewayService(
 		settingService:        settingService,
 		modelsListCache:       gocache.New(modelsListTTL, time.Minute),
 		modelsListCacheTTL:    modelsListTTL,
+		poolPlatformsCache:    gocache.New(compositePoolPlatformsCacheTTL, time.Minute),
 		responseHeaderFilter:  compileResponseHeaderFilter(cfg),
 		tlsFPProfileService:   tlsFPProfileService,
 		channelService:        channelService,
 		resolver:              resolver,
-		compositeResolver:     compositeResolver,
 		balanceNotifyService:  balanceNotifyService,
 		userPlatformQuotaRepo: userPlatformQuotaRepo,
 	}
@@ -1446,12 +1447,26 @@ func (s *GatewayService) GetAvailableModels(ctx context.Context, groupID *int64,
 	return cloneStringSlice(models)
 }
 
+// compositePoolPlatformsCacheTTL 组内可调度平台集合的缓存时长。
+// composite 统一池的入口分派（走 OpenAI 网关还是 Anthropic 网关）每个请求都要读
+// 一次池组成，直查会变成每请求一次全组账号扫描；TTL 取短值，账号变更最多 15s 后
+// 生效，且只影响入口分派，不影响选号正确性（选号仍读实时账号）。
+const compositePoolPlatformsCacheTTL = 15 * time.Second
+
 // GetSchedulablePlatforms returns the concrete platforms that currently have
 // schedulable accounts in the target group.
 func (s *GatewayService) GetSchedulablePlatforms(ctx context.Context, groupID *int64) map[string]struct{} {
 	platforms := make(map[string]struct{})
 	if s == nil || s.accountRepo == nil {
 		return platforms
+	}
+	cacheKey := modelsListCacheKey(groupID, "__platforms__")
+	if s.poolPlatformsCache != nil {
+		if cached, found := s.poolPlatformsCache.Get(cacheKey); found {
+			if cachedPlatforms, ok := cached.(map[string]struct{}); ok {
+				return cachedPlatforms
+			}
+		}
 	}
 
 	var accounts []Account
@@ -1470,6 +1485,9 @@ func (s *GatewayService) GetSchedulablePlatforms(ctx context.Context, groupID *i
 		if platform != "" {
 			platforms[platform] = struct{}{}
 		}
+	}
+	if s.poolPlatformsCache != nil {
+		s.poolPlatformsCache.SetDefault(cacheKey, platforms)
 	}
 	return platforms
 }

@@ -31,87 +31,54 @@ func ResolvedTargetPlatformFromContext(ctx context.Context) (string, bool) {
 	return platform, true
 }
 
-func WithCompositeRouteDecision(ctx context.Context, decision CompositeRouteDecision) context.Context {
-	if ctx == nil || !decision.Matched {
+// WithCompositePoolPlatformFilter 声明 composite 统一账号池在当前入口可转发的平台集合。
+//
+// composite 分组本身没有平台概念（设计 §2），但网关转发实现按入站协议分族：
+// Anthropic 协议入口（/v1/messages 等）没有三渠道的桥接实现，把这类账号交给调度
+// 只会得到一次必然失败的转发。因此由 handler 入口声明可服务平台，统一池在候选过滤
+// 阶段排除其余平台，让「不支持」明确表现为无可用账号而不是错协议请求。
+func WithCompositePoolPlatformFilter(ctx context.Context, platforms ...string) context.Context {
+	if ctx == nil || len(platforms) == 0 {
 		return ctx
 	}
-	ctx = WithResolvedTargetPlatform(ctx, decision.TargetPlatform)
-	if model := strings.TrimSpace(decision.UpstreamModel); model != "" {
-		ctx = context.WithValue(ctx, ctxkey.ResolvedUpstreamModel, model)
+	allowed := make([]string, 0, len(platforms))
+	for _, p := range platforms {
+		if p = strings.TrimSpace(p); p != "" {
+			allowed = append(allowed, p)
+		}
 	}
-	if model := strings.TrimSpace(decision.PublicModel); model != "" {
-		ctx = context.WithValue(ctx, ctxkey.RequestedPublicModel, model)
-	}
-	if source := strings.TrimSpace(decision.Source); source != "" {
-		ctx = context.WithValue(ctx, ctxkey.CompositeRouteSource, source)
-	}
-	return ctx
-}
-
-func ResolvedUpstreamModelFromContext(ctx context.Context) (string, bool) {
-	if ctx == nil {
-		return "", false
-	}
-	model, ok := ctx.Value(ctxkey.ResolvedUpstreamModel).(string)
-	model = strings.TrimSpace(model)
-	if !ok || model == "" {
-		return "", false
-	}
-	return model, true
-}
-
-// WithResolvedUpstreamModel 写入已解析的上游模型名（composite 多平台 fallback
-// 选中实际平台后，覆盖 middleware 用主目标写入的单值）。
-func WithResolvedUpstreamModel(ctx context.Context, model string) context.Context {
-	if ctx == nil || strings.TrimSpace(model) == "" {
+	if len(allowed) == 0 {
 		return ctx
 	}
-	return context.WithValue(ctx, ctxkey.ResolvedUpstreamModel, model)
+	return context.WithValue(ctx, ctxkey.CompositePoolPlatformFilter, allowed)
 }
 
-func RequestedPublicModelFromContext(ctx context.Context) (string, bool) {
+// CompositePoolPlatformFilterFromContext 返回当前入口可转发的平台集合；未设置时 ok=false。
+func CompositePoolPlatformFilterFromContext(ctx context.Context) ([]string, bool) {
 	if ctx == nil {
-		return "", false
+		return nil, false
 	}
-	model, ok := ctx.Value(ctxkey.RequestedPublicModel).(string)
-	model = strings.TrimSpace(model)
-	if !ok || model == "" {
-		return "", false
+	allowed, ok := ctx.Value(ctxkey.CompositePoolPlatformFilter).([]string)
+	if !ok || len(allowed) == 0 {
+		return nil, false
 	}
-	return model, true
+	return allowed, true
 }
 
-func CompositeRouteSourceFromContext(ctx context.Context) (string, bool) {
-	if ctx == nil {
-		return "", false
-	}
-	source, ok := ctx.Value(ctxkey.CompositeRouteSource).(string)
-	source = strings.TrimSpace(source)
-	if !ok || source == "" {
-		return "", false
-	}
-	return source, true
-}
-
-// WithCompositeCandidates 把 composite 解析出的有序候选平台列表写入 ctx，
-// 供多平台 fallback 调度在选中平台后使用对应候选的 UpstreamModel。
-func WithCompositeCandidates(ctx context.Context, candidates []CompositeRouteCandidate) context.Context {
-	if ctx == nil || len(candidates) == 0 {
-		return ctx
-	}
-	return context.WithValue(ctx, ctxkey.CompositeCandidates, candidates)
-}
-
-// CompositeCandidatesFromContext 返回 composite 候选平台列表（有序）。
-func CompositeCandidatesFromContext(ctx context.Context) []CompositeRouteCandidate {
-	if ctx == nil {
-		return nil
-	}
-	cands, ok := ctx.Value(ctxkey.CompositeCandidates).([]CompositeRouteCandidate)
+// CompositePoolAccountAllowed 判断账号平台是否可通过当前入口的协议族过滤。
+// 未设置过滤（如 OpenAI 协议通用入口）时一律放行。
+func CompositePoolAccountAllowed(ctx context.Context, platform string) bool {
+	allowed, ok := CompositePoolPlatformFilterFromContext(ctx)
 	if !ok {
-		return nil
+		return true
 	}
-	return cands
+	platform = strings.TrimSpace(platform)
+	for _, p := range allowed {
+		if p == platform {
+			return true
+		}
+	}
+	return false
 }
 
 // DetectModelPlatform maps common public model IDs to the concrete provider
@@ -190,34 +157,31 @@ func hasOpenAISeriesPrefix(model string) bool {
 	return false
 }
 
-func (s *GatewayService) resolveCompositeRouteDecision(ctx context.Context, group *Group, requestedModel, endpoint string) (CompositeRouteDecision, bool, error) {
-	if group == nil || group.Platform != PlatformComposite {
-		return CompositeRouteDecision{}, false, nil
-	}
-	if platform, ok := ResolvedTargetPlatformFromContext(ctx); ok {
-		upstreamModel := requestedModel
-		if resolvedModel, modelOK := ResolvedUpstreamModelFromContext(ctx); modelOK {
-			upstreamModel = resolvedModel
+// CompositeOpenAICompatPlatforms 是「只能经 OpenAI 网关入口服务」的平台集合：
+// 这些平台的账号没有 Anthropic 原生转发实现（走 OpenAIGatewayService 的协议桥），
+// 因此 composite 统一池的分派依据是「池内是否只有这一类平台」——是则整体按
+// OpenAI 入口处理，否则（含 anthropic/gemini/antigravity/三渠道）按 Anthropic
+// 入口处理并在选号时按端点协议族过滤。
+var CompositeOpenAICompatPlatforms = []string{
+	PlatformOpenAI, PlatformGrok, PlatformKimi, PlatformZhipu, PlatformDeepseek,
+}
+
+// IsCompositeOpenAICompatPlatform 报告平台是否属于 CompositeOpenAICompatPlatforms。
+func IsCompositeOpenAICompatPlatform(platform string) bool {
+	for _, p := range CompositeOpenAICompatPlatforms {
+		if p == platform {
+			return true
 		}
-		source := CompositeRouteSourceDetector
-		if resolvedSource, sourceOK := CompositeRouteSourceFromContext(ctx); sourceOK {
-			source = resolvedSource
-		}
-		return CompositeRouteDecision{
-			Matched:        true,
-			Source:         source,
-			GroupID:        group.ID,
-			PublicModel:    requestedModel,
-			TargetPlatform: platform,
-			UpstreamModel:  upstreamModel,
-			Endpoint:       normalizeCompositeRouteEndpoint(endpoint),
-		}, true, nil
 	}
-	decision, err := s.compositeResolver.Resolve(ctx, group.ID, requestedModel, endpoint)
-	if err != nil {
-		return decision, false, err
-	}
-	return decision, decision.Matched, nil
+	return false
+}
+
+// CompositeAnthropicNativePlatforms 是 Anthropic 协议入口（/v1/messages、
+// /v1/responses、count_tokens）可直接转发的平台集合。三渠道（workbuddy/traework/
+// qoder）没有 Messages/Responses 的 Anthropic 协议桥接实现，OpenAI 兼容平台则由
+// OpenAI 网关入口服务，因此都不在此列。
+var CompositeAnthropicNativePlatforms = []string{
+	PlatformAnthropic, PlatformAntigravity, PlatformGemini,
 }
 
 func isConcreteRequestPlatform(platform string) bool {

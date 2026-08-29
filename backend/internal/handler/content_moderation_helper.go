@@ -23,15 +23,11 @@ func contentModerationErrorCode(decision *service.ContentModerationDecision) str
 	return "content_policy_violation"
 }
 
-func clientRequestedModel(c *gin.Context, fallback string) string {
-	fallback = strings.TrimSpace(fallback)
-	if c == nil || c.Request == nil {
-		return fallback
-	}
-	if model, ok := service.RequestedPublicModelFromContext(c.Request.Context()); ok {
-		return model
-	}
-	return fallback
+// clientRequestedModel 返回客户端请求里的模型名。
+// composite 路由解析已取消，不存在「公开别名 → 上游模型名」的端点级改写，
+// 因此入站模型名就是客户端请求的模型名（仅需去空白归一）。
+func clientRequestedModel(_ *gin.Context, fallback string) string {
+	return strings.TrimSpace(fallback)
 }
 
 func clientRequestedUsageFields(c *gin.Context, mapping service.ChannelMappingResult, fallbackModel, upstreamModel string) service.ChannelUsageFields {

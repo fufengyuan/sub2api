@@ -1026,7 +1026,8 @@ func (s *GatewayService) selectCompositePoolAccount(
 			if sticky.ID != stickyAccountID {
 				continue
 			}
-			if !s.isAccountSchedulableForSelection(sticky) ||
+			if !CompositePoolAccountAllowed(ctx, sticky.Platform) ||
+				!s.isAccountSchedulableForSelection(sticky) ||
 				!s.isGatewayAccountProfitEligible(ctx, sticky) ||
 				(requestedModel != "" && !s.isModelSupportedByAccountWithContext(ctx, sticky, requestedModel)) ||
 				!s.isAccountSchedulableForModelSelection(ctx, sticky, requestedModel) ||
@@ -1065,6 +1066,10 @@ func (s *GatewayService) selectCompositePoolAccount(
 	for i := range accounts {
 		acc := &accounts[i]
 		if isExcluded(acc.ID) {
+			continue
+		}
+		// 端点协议族过滤：当前入口无法转发的平台不参与选号。
+		if !CompositePoolAccountAllowed(ctx, acc.Platform) {
 			continue
 		}
 		if !s.isAccountSchedulableForSelection(acc) {

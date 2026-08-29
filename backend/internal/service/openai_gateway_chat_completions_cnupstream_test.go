@@ -228,17 +228,12 @@ func TestForwardCnUpstreamNoCrossPlatformFallback(t *testing.T) {
 		return nil, fmt.Errorf("fake: all %s accounts unavailable", platform)
 	})
 
-	ctx := WithCompositeCandidates(context.Background(), []CompositeRouteCandidate{
-		{Platform: PlatformTraeWork},
-		{Platform: PlatformWorkBuddy},
-	})
-
 	gin.SetMode(gin.TestMode)
 	rec := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(rec)
 	c.Request = httptest.NewRequest("POST", "/v1/chat/completions", nil)
 
-	_, err := svc.forwardCnUpstreamChatCompletions(ctx, c, &Account{Platform: PlatformTraeWork},
+	_, err := svc.forwardCnUpstreamChatCompletions(context.Background(), c, &Account{Platform: PlatformTraeWork},
 		[]byte(`{"model":"glm-5.2","stream":true,"messages":[]}`))
 	if err == nil {
 		t.Fatal("expected failover error")

@@ -8,21 +8,12 @@ const (
 	// ForcePlatform 强制平台（用于 /antigravity 路由），由 middleware.ForcePlatform 设置
 	ForcePlatform Key = "ctx_force_platform"
 
-	// ResolvedTargetPlatform 是 composite 分组按请求模型解析出的真实目标平台。
+	// ResolvedTargetPlatform 是 composite 分组按端点语义/模型名探测出的目标平台。
 	ResolvedTargetPlatform Key = "ctx_resolved_target_platform"
 
-	// ResolvedUpstreamModel 是 composite 分组将公开模型名解析到的上游模型名。
-	ResolvedUpstreamModel Key = "ctx_resolved_upstream_model"
-
-	// RequestedPublicModel 是客户端原始请求中的公开模型名。
-	RequestedPublicModel Key = "ctx_requested_public_model"
-
-	// CompositeRouteSource 标识 composite 解析结果来自显式路由还是内置模型探测。
-	CompositeRouteSource Key = "ctx_composite_route_source"
-
-	// CompositeCandidates 是 composite 分组解析出的有序候选平台列表
-	// （主目标在前，fallback 依次在后），供多平台 fallback 调度使用。
-	CompositeCandidates Key = "ctx_composite_candidates"
+	// CompositePoolPlatformFilter 是 composite 统一账号池的协议族过滤：当前入口
+	// 能转发的平台集合（不在集合内的账号不参与选号）。由具体 handler 入口写入。
+	CompositePoolPlatformFilter Key = "ctx_composite_pool_platform_filter"
 
 	// RequestID 为服务端生成/透传的请求 ID。
 	RequestID Key = "ctx_request_id"

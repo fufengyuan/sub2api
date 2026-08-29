@@ -76,10 +76,6 @@ func (h *GatewayHandler) ChatCompletions(c *gin.Context) {
 	}
 	reqModel := modelResult.String()
 	ensureCompositeTargetPlatform(c, apiKey, reqModel)
-	if !compositeTargetPlatformResolved(c, apiKey, reqModel) {
-		h.chatCompletionsErrorResponse(c, http.StatusBadRequest, "invalid_request_error", "Model is not supported by composite groups")
-		return
-	}
 	reqStream, ok := parseOpenAICompatibleStream(body)
 	if !ok {
 		h.chatCompletionsErrorResponse(c, http.StatusBadRequest, "invalid_request_error", invalidStreamFieldTypeMessage)
@@ -277,6 +273,21 @@ func (h *GatewayHandler) ChatCompletions(c *gin.Context) {
 			var cnResult *service.OpenAIForwardResult
 			cnResult, err = h.openAIGatewayService.ForwardAsChatCompletions(c.Request.Context(), c, account, forwardBody, "", channelMapping.MappedModel)
 			result = service.OpenAIForwardResultToForwardResult(cnResult)
+		} else if apiKey.Group != nil && apiKey.Group.Platform == service.PlatformComposite &&
+			service.IsCompositeOpenAICompatPlatform(account.Platform) {
+			// 统一账号池混合分派：OpenAI 兼容账号（openai/grok/kimi/zhipu/deepseek）
+			// 没有 Anthropic 原生转发实现，GatewayService 的 CC→Anthropic 转换对它们是
+			// 错误协议，交回 OpenAIGatewayService 的原生/桥接分支再转回旧计费链路结构。
+			if h.openAIGatewayService == nil {
+				h.chatCompletionsErrorResponse(c, http.StatusBadGateway, "upstream_error", "OpenAI gateway service is not configured")
+				if accountReleaseFunc != nil {
+					accountReleaseFunc()
+				}
+				return
+			}
+			var oaiResult *service.OpenAIForwardResult
+			oaiResult, err = h.openAIGatewayService.ForwardAsChatCompletions(c.Request.Context(), c, account, forwardBody, "", channelMapping.MappedModel)
+			result = service.OpenAIForwardResultToForwardResult(oaiResult)
 		} else if account.Platform == service.PlatformGemini {
 			if h.geminiCompatService == nil {
 				h.chatCompletionsErrorResponse(c, http.StatusBadGateway, "upstream_error", "Gemini compatibility service is not configured")

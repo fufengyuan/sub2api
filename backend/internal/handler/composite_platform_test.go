@@ -61,44 +61,51 @@ func TestResponsesWebSocketCompositePlatformGuardKeepsOpenAIAndGrokOnly(t *testi
 	}
 }
 
-func TestCompositeTargetPlatformAllowedRejectsWrongOrUnknownModel(t *testing.T) {
+func TestCompositeTargetPlatformAllowsUnknownModelAndRejectsWrongProvider(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
-	for _, tc := range []struct {
-		name  string
-		model string
-	}{
-		{name: "wrong provider", model: "claude-sonnet-4-5"},
-		{name: "unknown provider", model: "llama-4-maverick"},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			c, _ := gin.CreateTestContext(httptest.NewRecorder())
-			c.Request = httptest.NewRequest("POST", "/v1/embeddings", nil)
-			apiKey := &service.APIKey{Group: &service.Group{Platform: service.PlatformComposite}}
+	t.Run("探测不出平台的别名放行，交给统一池判定", func(t *testing.T) {
+		c, _ := gin.CreateTestContext(httptest.NewRecorder())
+		c.Request = httptest.NewRequest("POST", "/v1/embeddings", nil)
+		apiKey := &service.APIKey{Group: &service.Group{Platform: service.PlatformComposite}}
 
-			require.False(t, compositeTargetPlatformAllowed(c, apiKey, tc.model, service.PlatformOpenAI))
-		})
-	}
+		require.True(t, compositeTargetPlatformAllowed(c, apiKey, "llama-4-maverick", service.PlatformOpenAI))
+		_, ok := service.ResolvedTargetPlatformFromContext(c.Request.Context())
+		require.False(t, ok, "放行为主时不应臆造目标平台")
+	})
+
+	t.Run("探测到明确不匹配的平台仍拒绝", func(t *testing.T) {
+		c, _ := gin.CreateTestContext(httptest.NewRecorder())
+		c.Request = httptest.NewRequest("POST", "/v1/embeddings", nil)
+		apiKey := &service.APIKey{Group: &service.Group{Platform: service.PlatformComposite}}
+
+		require.False(t, compositeTargetPlatformAllowed(c, apiKey, "claude-sonnet-4-5", service.PlatformOpenAI))
+	})
 }
 
-func TestCompositeTargetPlatformResolvedRejectsUnknownModel(t *testing.T) {
+// composite 统一池在 Anthropic 协议入口按端点协议族过滤账号；非 composite 组不受影响。
+func TestBindCompositePoolAnthropicProtocolFilter(t *testing.T) {
 	gin.SetMode(gin.TestMode)
-	c, _ := gin.CreateTestContext(httptest.NewRecorder())
-	c.Request = httptest.NewRequest("POST", "/v1/messages", nil)
-	apiKey := &service.APIKey{Group: &service.Group{Platform: service.PlatformComposite}}
 
-	require.False(t, compositeTargetPlatformResolved(c, apiKey, "llama-4-maverick"))
-	_, ok := service.ResolvedTargetPlatformFromContext(c.Request.Context())
-	require.False(t, ok)
-}
+	compositeCtx, _ := gin.CreateTestContext(httptest.NewRecorder())
+	compositeCtx.Request = httptest.NewRequest("POST", "/v1/messages", nil)
+	bindCompositePoolAnthropicProtocolFilter(compositeCtx, &service.APIKey{
+		Group: &service.Group{Platform: service.PlatformComposite},
+	})
+	allowed, ok := service.CompositePoolPlatformFilterFromContext(compositeCtx.Request.Context())
+	require.True(t, ok, "composite 组应写入端点协议族过滤")
+	require.ElementsMatch(t, service.CompositeAnthropicNativePlatforms, allowed)
+	require.True(t, service.CompositePoolAccountAllowed(compositeCtx.Request.Context(), service.PlatformAnthropic))
+	require.False(t, service.CompositePoolAccountAllowed(compositeCtx.Request.Context(), service.PlatformWorkBuddy),
+		"三渠道无 Anthropic 协议桥接实现，不应被选中")
 
-func TestCompositeTargetPlatformResolvedAllowsConcreteGroupWithoutResolution(t *testing.T) {
-	gin.SetMode(gin.TestMode)
-	c, _ := gin.CreateTestContext(httptest.NewRecorder())
-	c.Request = httptest.NewRequest("POST", "/v1/messages", nil)
-	apiKey := &service.APIKey{Group: &service.Group{Platform: service.PlatformAnthropic}}
-
-	require.True(t, compositeTargetPlatformResolved(c, apiKey, "llama-4-maverick"))
+	plainCtx, _ := gin.CreateTestContext(httptest.NewRecorder())
+	plainCtx.Request = httptest.NewRequest("POST", "/v1/messages", nil)
+	bindCompositePoolAnthropicProtocolFilter(plainCtx, &service.APIKey{
+		Group: &service.Group{Platform: service.PlatformOpenAI},
+	})
+	_, ok = service.CompositePoolPlatformFilterFromContext(plainCtx.Request.Context())
+	require.False(t, ok, "非 composite 分组不写过滤")
 }
 
 func TestOpenAIReasoningEffortPolicyForCompositeTarget(t *testing.T) {
@@ -141,24 +148,18 @@ func TestOpenAIReasoningEffortPolicyForCompositeTarget(t *testing.T) {
 	require.Equal(t, body, got)
 }
 
-func TestClientRequestedModelUsesCompositePublicModel(t *testing.T) {
+// 取消路由解析后不再存在「公开别名 → 上游模型名」的 ctx 改写：内容审计入参与用量
+// 字段都直接使用请求里的模型名，Provider 由端点/模型探测出的平台决定。
+func TestClientRequestedModelFallsBackToRequestedModel(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	c, _ := gin.CreateTestContext(httptest.NewRecorder())
 	c.Request = httptest.NewRequest("POST", "/v1/chat/completions", nil)
-	c.Request = c.Request.WithContext(service.WithCompositeRouteDecision(c.Request.Context(), service.CompositeRouteDecision{
-		Matched:        true,
-		Source:         service.CompositeRouteSourceExplicit,
-		PublicModel:    "public-alias",
-		TargetPlatform: service.PlatformOpenAI,
-		UpstreamModel:  "gpt-5",
-	}))
+	c.Request = c.Request.WithContext(service.WithResolvedTargetPlatform(c.Request.Context(), service.PlatformOpenAI))
 
 	input := buildContentModerationInput(c, nil, middleware2.AuthSubject{UserID: 42}, service.ContentModerationProtocolOpenAIChat, "gpt-5", nil)
-	require.Equal(t, "public-alias", input.Model)
+	require.Equal(t, "gpt-5", input.Model)
 	require.Equal(t, service.PlatformOpenAI, input.Provider)
 
 	fields := clientRequestedUsageFields(c, service.ChannelMappingResult{MappedModel: "gpt-5"}, "gpt-5", "gpt-5")
-	require.Equal(t, "public-alias", fields.OriginalModel)
-	require.Equal(t, "public-alias", fields.ChannelMappedModel)
-	require.Equal(t, "public-alias\u2192gpt-5", fields.ModelMappingChain)
+	require.Equal(t, "gpt-5", fields.OriginalModel)
 }
