@@ -79,18 +79,20 @@ func RegisterGatewayRoutes(
 			h.Gateway.CountTokens(c)
 		}
 	}
+	codexModelsHandler := func(c *gin.Context) {
+		// composite 统一池：纯 openai 池仍走 Codex（OpenAI 网关）实现，
+		// 其余池由通用实现兜住；其它平台沿用上游的按分组平台分派。
+		if getGroupPlatform(c) == service.PlatformComposite &&
+			compositePoolOnlyPlatforms(c, service.PlatformOpenAI) {
+			h.OpenAIGateway.CodexModels(c)
+			return
+		}
+		dispatchCodexModelsGateway(c, h.OpenAIGateway.CodexModels, h.Gateway.CodexModels)
+	}
 	modelsHandler := func(c *gin.Context) {
 		if c.Query("client_version") != "" {
-			switch getGroupPlatform(c) {
-			case service.PlatformOpenAI:
-				h.OpenAIGateway.CodexModels(c)
-				return
-			case service.PlatformComposite:
-				if compositePoolOnlyPlatforms(c, service.PlatformOpenAI) {
-					h.OpenAIGateway.CodexModels(c)
-					return
-				}
-			}
+			codexModelsHandler(c)
+			return
 		}
 		h.Gateway.Models(c)
 	}
@@ -137,7 +139,10 @@ func RegisterGatewayRoutes(
 		}
 	}
 	videoGenerationHandler := func(c *gin.Context) {
-		if getGroupPlatform(c) == service.PlatformGrok {
+		// Video status/content lookups below already allow Composite groups; keep
+		// task creation aligned so composite keys that route to Grok accounts can
+		// submit video generation jobs.
+		if platform := getGroupPlatform(c); platform == service.PlatformGrok || platform == service.PlatformComposite {
 			h.OpenAIGateway.GrokVideoGeneration(c)
 			return
 		}
@@ -414,7 +419,7 @@ func RegisterGatewayRoutes(
 		codexDirect.GET("/responses", func(c *gin.Context) {
 			h.OpenAIGateway.ResponsesWebSocket(c)
 		})
-		codexDirect.GET("/models", h.OpenAIGateway.CodexModels)
+		codexDirect.GET("/models", codexModelsHandler)
 	}
 	// OpenAI Chat Completions API（不带v1前缀的别名）— auto-route based on group platform
 	r.POST("/chat/completions", bodyLimit, clientRequestID, opsErrorLogger, endpointNorm, gin.HandlerFunc(apiKeyAuth), requireGroupAnthropic, func(c *gin.Context) {
@@ -539,6 +544,14 @@ func RegisterGatewayRoutes(
 		antigravityV1Beta.POST("/models/*modelAction", h.Gateway.GeminiV1BetaModels)
 	}
 
+}
+
+func dispatchCodexModelsGateway(c *gin.Context, openAIHandler, generatedHandler gin.HandlerFunc) {
+	if getGroupPlatform(c) == service.PlatformOpenAI {
+		openAIHandler(c)
+		return
+	}
+	generatedHandler(c)
 }
 
 // getGroupPlatform extracts the group platform from the API Key stored in context.
