@@ -2560,6 +2560,13 @@ func setDefaults() {
 // environment. Any subsystem that wants a richer default still applies it after
 // unmarshal, exactly as before.
 func setEnvReachableDefaults() {
+	// 国产三渠道自动签到/保活：未登记默认值的键不进入 viper.AllKeys()，无
+	// config.yaml 的部署里环境变量会被静默丢弃（签到无法通过 env 开启）。
+	viper.SetDefault("checkin.enabled", false)
+	viper.SetDefault("checkin.times", []string{})
+	viper.SetDefault("checkin.keepalive_hours", []int{})
+	viper.SetDefault("checkin.backoff_seconds", 0)
+
 	viper.SetDefault("gateway.forced_codex_instructions_template_file", "")
 	viper.SetDefault("gateway.session_idle_timeout_minutes", 0)
 	viper.SetDefault("gateway.user_message_queue.mode", "")
