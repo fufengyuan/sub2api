@@ -1,6 +1,8 @@
-// models.go 动态模型获取：COSY 签名 GET /algo/api/v2/model/list?Encode=1，
-// 拿 chat scene 的 key 列表 → provider.ModelInfo。
-// 移植自 qoderwork2api internal/upstream/models.go。
+// models.go 动态模型获取：COSY 签名 GET /algo/api/v2/model/list（千问办公不带
+// Encode 参数），优先解析 qwork scene 的 key 列表、回退 chat scene
+// → provider.ModelInfo，并把 客户端名→上游 key 缓存进 Client 供 ChatStream 路由。
+// 移植自 qoderwork2api internal/upstream/models.go，场景解析对齐上游
+// workbuddy-wild b492a0c（"模型列表拉取改用 qwork 场景解析"）。
 package qwenwork
 
 import (
@@ -16,7 +18,7 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/cnupstream/provider"
 )
 
-// DynamicModel 上游 chat scene 单个模型。
+// DynamicModel 上游模型列表单个模型（qwork 或 chat scene）。
 type DynamicModel struct {
 	Key            string  `json:"key"`
 	DisplayName    string  `json:"display_name"`
@@ -27,7 +29,7 @@ type DynamicModel struct {
 	PriceFactor    float64 `json:"price_factor"`
 }
 
-// fetchModels 调上游动态模型接口。
+// fetchModels 调上游动态模型接口。Authorization 用 COSY 签名 token（非裸 dt-）。
 // GET 无 body，签名用空串 ""（非 "{}"，后者 403 Signature invalid）。
 func (c *Client) fetchModels(a *auth.Auth) ([]DynamicModel, error) {
 	dt := a.JWT()
