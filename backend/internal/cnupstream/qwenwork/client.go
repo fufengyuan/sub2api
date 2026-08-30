@@ -24,12 +24,9 @@ type Client struct {
 	HTTP    *http.Client
 	Gateway string // 推理网关 + 业务 API，默认 https://gateway.qwenwork.cn
 
-	// modelMap 客户端名（display_name 规范化）→ 上游 model key。
-	// 由 FetchModels 填充；ChatStream 优先查此表，查不到再查静态表。
-	modelMu  sync.RWMutex
-	modelMap map[string]string
-
 	// lastModel 最近一次 chat 请求的客户端模型名（含 qwenwork/ 前缀），
+	// 注：仍是平台级共享——provider.Upstream.Stream/Aggregate 签名不带账号，
+	// 无法按账号归属；它只影响响应里的 model 字段展示，不影响路由。
 	// 供 Aggregate/Stream 覆盖响应中的 model 字段（上游恒为 auto）。
 	lastModelMu sync.RWMutex
 	lastModel   string
@@ -61,13 +58,6 @@ func NewWithGateway(gateway string) *Client {
 	return c
 }
 
-// setModelMap 记录动态模型映射（客户端名 → key）。
-func (c *Client) setModelMap(m map[string]string) {
-	c.modelMu.Lock()
-	c.modelMap = m
-	c.modelMu.Unlock()
-}
-
 // setLastModel 记录最近一次 chat 的客户端模型名。
 func (c *Client) setLastModel(m string) {
 	c.lastModelMu.Lock()
@@ -82,15 +72,46 @@ func (c *Client) lastClientModel() string {
 	return c.lastModel
 }
 
-// modelKey 客户端模型名 → 上游 model key：动态映射优先，静态表兜底。
-func (c *Client) modelKey(clientName string) string {
-	c.modelMu.RLock()
-	k := c.modelMap[clientName]
-	c.modelMu.RUnlock()
-	if k != "" {
-		return k
+// modelMapTTL 账号动态模型表的重拉间隔：ChatStream 解析不到 key 且表已过期时懒刷新。
+const modelMapTTL = 30 * time.Minute
+
+// resolveModelKey 客户端模型名 → 上游 model key：**该账号**的动态映射优先，静态表兜底。
+// 返回空串表示两级都没命中，由调用方决定懒刷新还是原样透传。
+// 动态映射挂在 auth.Auth 上而非 Client：Client 是平台级单例，同平台不同套餐
+// 账号可见的模型集不同，共享会互相覆盖 key。
+func resolveModelKey(a *auth.Auth, clientName string) string {
+	if a != nil {
+		if k := a.ModelKey(clientName); k != "" {
+			return k
+		}
 	}
 	return staticModelKeys[clientName]
+}
+
+// refreshAccountModelMap 拉取该账号可见的动态模型表并写回其 Auth。
+// 失败仅推进 attempt 时间戳（MarkModelMapAttempt），避免每个请求都重打上游。
+func (c *Client) refreshAccountModelMap(a *auth.Auth) bool {
+	if a == nil {
+		return false
+	}
+	dyn, err := c.fetchModels(a)
+	if err != nil {
+		a.MarkModelMapAttempt()
+		return false
+	}
+	mm := make(map[string]string, len(dyn))
+	for _, m := range dyn {
+		if !m.Enable || m.Key == "" {
+			continue
+		}
+		name := NormalizeModelName(m.DisplayName)
+		if name == "" {
+			name = m.Key
+		}
+		mm[name] = m.Key
+	}
+	a.SetModelMap(mm)
+	return true
 }
 
 func (c *Client) gatewayBase() string { return c.Gateway }
@@ -222,7 +243,15 @@ func (c *Client) ChatStream(a *auth.Auth, body []byte) (rc io.ReadCloser, status
 		return nil, 0, nil, fmt.Errorf("parse chat body: %w", err)
 	}
 	c.setLastModel(reqOpenAI.Model)
-	modelKey := c.modelKey(reqOpenAI.Model)
+	modelKey := resolveModelKey(a, reqOpenAI.Model)
+	// 两级映射都没命中且该账号的动态表还没拉过（或已过期）：懒刷新一次。
+	// 映射按账号隔离后，管理员只为 A 账号点过「拉取上游模型」不再顺带惠及
+	// B 账号，这里补一次按需拉取，避免 B 账号只能靠静态表。
+	if modelKey == "" && a.ModelMapsStale(modelMapTTL) {
+		if c.refreshAccountModelMap(a) {
+			modelKey = resolveModelKey(a, reqOpenAI.Model)
+		}
+	}
 	if modelKey == "" {
 		modelKey = reqOpenAI.Model
 	}
@@ -456,14 +485,22 @@ func (c *Client) ChatStream2(a *auth.Auth, body []byte, modelKey string) (io.Rea
 	rawBody := body
 	url := c.gatewayBase() + EpChat
 	req, err := http.NewRequest(http.MethodPost, url, bytes.NewReader(rawBody))
-	if err != nil { return nil, 0, nil, err }
+	if err != nil {
+		return nil, 0, nil, err
+	}
 	dt := a.JWT()
 	sess, err := NewCosySession(a.MachineID, a.MachineToken, a.MachineType, a.Nickname, a.UID, dt, a.RefreshToken)
-	if err != nil { return nil, 0, nil, fmt.Errorf("cosy session: %w", err) }
-	if err := sess.ApplyHeaders(req, string(rawBody), url, a.UID, true, modelKey); err != nil { return nil, 0, nil, fmt.Errorf("cosy headers: %w", err) }
+	if err != nil {
+		return nil, 0, nil, fmt.Errorf("cosy session: %w", err)
+	}
+	if err := sess.ApplyHeaders(req, string(rawBody), url, a.UID, true, modelKey); err != nil {
+		return nil, 0, nil, fmt.Errorf("cosy headers: %w", err)
+	}
 	req.Header.Set("x-qw-request-id", uuidNoDash())
 	resp, err := c.HTTP.Do(req)
-	if err != nil { return nil, 0, nil, err }
+	if err != nil {
+		return nil, 0, nil, err
+	}
 	if resp.StatusCode >= 400 {
 		rb, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 		resp.Body.Close()

@@ -551,6 +551,13 @@ func (s *CnUpstreamService) FetchUpstreamModels(ctx context.Context, accountID i
 	if err != nil {
 		return nil, err
 	}
+	// 动态模型映射按账号存在 auth.Auth 上，必须写进**池内那个长期实例**：
+	// 网关聊天链路取的是池内 Auth，若把映射写进 loadCnAccount 新建的临时
+	// Auth，管理员拉完模型聊天时仍然解析不到 key。池内暂无该账号（新增后
+	// 尚未 Reload）时退回临时 Auth，由 ChatStream 的按账号懒刷新兜住。
+	if pooled := rt.pool.AuthByAccountID(accountID); pooled != nil {
+		a = pooled
+	}
 	models, err := rt.upstream.FetchModels(a)
 	if err != nil {
 		return nil, infraerrors.Newf(http.StatusBadGateway, "CN_UPSTREAM_QUERY_FAILED", "拉取上游模型列表失败: %v", err)

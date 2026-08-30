@@ -48,7 +48,8 @@ func TestFetchModelsPrefersQworkScene(t *testing.T) {
 	defer srv.Close()
 
 	c := &Client{HTTP: srv.Client(), Gateway: srv.URL}
-	models, err := c.FetchModels(testAuth())
+	a := testAuth()
+	models, err := c.FetchModels(a)
 	if err != nil {
 		t.Fatalf("FetchModels: %v", err)
 	}
@@ -71,9 +72,18 @@ func TestFetchModelsPrefersQworkScene(t *testing.T) {
 	if models[0].ContextWindow != 262144 {
 		t.Fatalf("ContextWindow = %d, want 262144", models[0].ContextWindow)
 	}
-	// 拉到的 key 映射必须缓存进 Client 供 ChatStream 路由（否则只能靠静态表）。
-	if key := c.modelKey("qwen3.8-max"); key != "qmodel_38max" {
-		t.Fatalf("modelKey(qwen3.8-max) = %q, want qmodel_38max", key)
+	// 拉到的 key 映射必须落在**该账号的 Auth** 上供 ChatStream 路由，
+	// 且不得污染同平台其它账号（Client 是平台级单例）。
+	if key := a.ModelKey("qwen3.8-max"); key != "qmodel_38max" {
+		t.Fatalf("Auth.ModelKey(qwen3.8-max) = %q, want qmodel_38max", key)
+	}
+	other := testAuth()
+	other.UID = "acct-other"
+	if key := resolveModelKey(other, "qwen3.8-max"); key != "qmodel_38max" {
+		t.Fatalf("其它账号应走静态表, got %q", key)
+	}
+	if got := other.ModelKey("qwen3.8-max"); got != "" {
+		t.Fatalf("其它账号的动态表不应被写入, got %q", got)
 	}
 }
 

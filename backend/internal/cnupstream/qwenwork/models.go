@@ -93,7 +93,7 @@ func (c *Client) fetchModels(a *auth.Auth) ([]DynamicModel, error) {
 
 // FetchModels 实现 provider.Upstream：动态模型 → provider.ModelInfo。
 // 客户端名 = display_name 规范化（无 display_name 用 key 兜底）。
-// 同时把 客户端名→key 映射缓存到 Client，供 ChatStream 路由。
+// 同时把 客户端名→key 映射缓存到**该账号的 Auth**，供 ChatStream 路由（按账号隔离）。
 func (c *Client) FetchModels(a *auth.Auth) ([]provider.ModelInfo, error) {
 	dyn, err := c.fetchModels(a)
 	if err != nil {
@@ -117,7 +117,7 @@ func (c *Client) FetchModels(a *auth.Auth) ([]provider.ModelInfo, error) {
 		}
 		out = append(out, mi)
 	}
-	c.setModelMap(mm)
+	a.SetModelMap(mm)
 	if len(out) == 0 {
 		return nil, fmt.Errorf("models api returned empty list")
 	}

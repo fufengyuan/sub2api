@@ -2,6 +2,7 @@ package qwenwork
 
 import (
 	"encoding/json"
+	"github.com/Wei-Shaw/sub2api/internal/cnupstream/auth"
 	"testing"
 )
 
@@ -38,17 +39,44 @@ func TestModelKeyStatic(t *testing.T) {
 	}
 }
 
+// 动态映射优先于静态表，且**按账号隔离**：A 账号的映射不得影响 B 账号。
 func TestModelKeyDynamicPrecedence(t *testing.T) {
-	c := New()
-	c.setModelMap(map[string]string{"glm-5.3": "gmodel-new", "custom": "ckey"})
-	if got := c.modelKey("glm-5.3"); got != "gmodel-new" {
-		t.Errorf("dynamic should win, got %q", got)
+	a := &auth.Auth{UID: "acct-a"}
+	a.SetModelMap(map[string]string{"glm-5.3": "gmodel-new", "custom": "ckey"})
+	b := &auth.Auth{UID: "acct-b"} // 从未拉取过模型表
+
+	if got := resolveModelKey(a, "glm-5.3"); got != "gmodel-new" {
+		t.Errorf("账号动态映射应优先于静态表, got %q", got)
 	}
-	if got := c.modelKey("custom"); got != "ckey" {
-		t.Errorf("dynamic custom got %q", got)
+	if got := resolveModelKey(a, "custom"); got != "ckey" {
+		t.Errorf("账号自定义模型名应可解析, got %q", got)
 	}
-	if got := c.modelKey("deepseek-v4-pro"); got != "dmodel" { // 动态缺失 → 静态兜底
+	if got := resolveModelKey(a, "deepseek-v4-pro"); got != "dmodel" { // 动态缺失 → 静态兜底
 		t.Errorf("static fallback got %q", got)
+	}
+	if got := resolveModelKey(b, "glm-5.3"); got != "gmodel" {
+		t.Fatalf("B 账号必须走静态表而非 A 账号的 %q", got)
+	}
+	if got := resolveModelKey(b, "custom"); got != "" {
+		t.Fatalf("B 账号不应看到 A 账号独有的映射, got %q", got)
+	}
+	if got := resolveModelKey(nil, "glm-5.3"); got != "gmodel" {
+		t.Fatalf("nil Auth 应退回静态表, got %q", got)
+	}
+}
+
+// 拉取失败只推进 attempt 时间戳：短期内不再重打上游，超过 TTL 后仍会再试。
+func TestModelMapAttemptThrottle(t *testing.T) {
+	a := &auth.Auth{}
+	if !a.ModelMapsStale(0) {
+		t.Fatal("从未拉取的账号应判定为 stale")
+	}
+	c := New()
+	if c.refreshAccountModelMap(a) {
+		t.Fatal("上游不可达时刷新应失败")
+	}
+	if a.ModelMapsStale(0) {
+		t.Fatal("失败后应记录 attempt，避免每个请求都重打上游")
 	}
 }
 

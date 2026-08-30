@@ -36,6 +36,52 @@ type Auth struct {
 	EnterpriseID string
 	Nickname     string
 	FilePath     string // 来源文件；refresh 后原子写回此处
+
+	// 运行期动态模型映射（客户端名 → 上游 model key）与最近一次拉取时间。
+	// 按账号隔离：同平台不同套餐/租户可见的模型集不同，挂在平台级 Client
+	// 单例上会让后拉取的账号覆盖前一个账号的映射，导致请求带错 model key。
+	// 不导出、不参与 JSON 序列化（纯运行期缓存，进程重启后按需重拉）。
+	modelMu       sync.RWMutex
+	modelMap      map[string]string
+	modelsFetched time.Time
+}
+
+// SetModelMap 记录本账号的动态模型映射并打上拉取时间（供 TTL 判定）。
+func (a *Auth) SetModelMap(m map[string]string) {
+	a.modelMu.Lock()
+	a.modelMap = m
+	a.modelsFetched = time.Now()
+	a.modelMu.Unlock()
+}
+
+// ModelKey 返回本账号动态映射里的上游 model key；未命中返回空串。
+func (a *Auth) ModelKey(clientName string) string {
+	a.modelMu.RLock()
+	defer a.modelMu.RUnlock()
+	return a.modelMap[clientName]
+}
+
+// ModelMapsStale 报告本账号是否需要在下次请求前重拉动态模型表：
+// 从未成功记录过（零值）或超过 ttl 视为过期。ttl <= 0 表示只在从未拉取时刷新。
+func (a *Auth) ModelMapsStale(ttl time.Duration) bool {
+	a.modelMu.RLock()
+	defer a.modelMu.RUnlock()
+	fetched := a.modelsFetched
+	if fetched.IsZero() {
+		return true
+	}
+	if ttl <= 0 {
+		return false
+	}
+	return time.Since(fetched) > ttl
+}
+
+// MarkModelMapAttempt 在拉取失败时也推进时间戳，避免每次聊天请求都重打上游。
+// 保留 TTL 语义：超过 ttl 后仍会再次尝试。
+func (a *Auth) MarkModelMapAttempt() {
+	a.modelMu.Lock()
+	a.modelsFetched = time.Now()
+	a.modelMu.Unlock()
 }
 
 // Lock 供同进程内其他包（upstream.RefreshToken）在改写 Auth 字段期间加锁。

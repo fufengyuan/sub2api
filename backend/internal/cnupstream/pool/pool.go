@@ -428,6 +428,23 @@ func (p *Pool) AuthByUID(uid string) *auth.Auth {
 	return nil
 }
 
+// AuthByAccountID 按 ent 账号主键取池内长期存活的凭证对象。
+// 动态模型映射等运行期状态挂在 auth.Auth 上，必须落到池内这一个实例，
+// 管理端「拉取上游模型」与网关聊天才会读到同一份数据。
+func (p *Pool) AuthByAccountID(accountID int64) *auth.Auth {
+	if accountID <= 0 {
+		return nil
+	}
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	for _, e := range p.byUID {
+		if e.a != nil && e.a.AccountID == accountID {
+			return e.a
+		}
+	}
+	return nil
+}
+
 // List 返回所有账号状态（按 UID 排序，稳定输出）。
 func (p *Pool) List() []Status {
 	p.mu.RLock()
