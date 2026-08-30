@@ -92,6 +92,11 @@ type apiEnvelope struct {
 // Client 上游 HTTP 客户端。Base 字段可覆盖便于测试。
 type Client struct {
 	HTTP *http.Client
+	// StreamHTTP 供 ChatStream 流式转发使用：不设 http.Client.Timeout 总超时，
+	// 否则 SSE 流一旦持续超过 HTTP 的 Timeout（默认 120s）就会被 resp.Body 读取
+	// 强制中断（长推理/长输出必炸）。与 traework/qwenwork/qoder 的 StreamHTTP
+	// 同范式。为 nil 时回退到 HTTP。
+	StreamHTTP *http.Client
 	// BillingHTTP 供账单/签到接口使用（短超时，慢网络下避免面板操作长时间假死）。
 	// 为 nil 时回退到 HTTP。
 	BillingHTTP *http.Client
@@ -111,6 +116,7 @@ func New() *Client {
 	}
 	return &Client{
 		HTTP:            &http.Client{Timeout: 120 * time.Second, Transport: tr},
+		StreamHTTP:      &http.Client{Transport: tr},
 		BillingHTTP:     &http.Client{Timeout: 30 * time.Second, Transport: tr},
 		ChatBaseCN:      "https://copilot.tencent.com",
 		BillingBaseCN:   "https://www.codebuddy.cn",
@@ -236,7 +242,11 @@ func (c *Client) ChatStream(a *auth.Auth, body []byte) (rc io.ReadCloser, status
 		return nil, 0, nil, err
 	}
 	ChatHeaders(req, a)
-	resp, err := c.HTTP.Do(req)
+	hc := c.HTTP
+	if c.StreamHTTP != nil {
+		hc = c.StreamHTTP
+	}
+	resp, err := hc.Do(req)
 	if err != nil {
 		log.Printf("chat_stream uid=%s: transport error: %v", a.UID, err)
 		return nil, 0, nil, err
