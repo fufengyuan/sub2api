@@ -114,7 +114,7 @@
 
 ## Open questions / Follow-ups
 
-- `upstream.Client.HTTP`（[client.go:113](client.go)）仍 `Timeout:120s`。workbuddy 平台 `ChatStream` 走该 `HTTP` 做流式——若 workbuddy 也出现长流 504，需同样加 `StreamHTTP`。本次 qwenwork（用户报错平台）+ qoder（同构）已修，workbuddy 因未复现且改动面扩大，留作 follow-up。
+- ~~`upstream.Client.HTTP`（[client.go:113](client.go)）仍 `Timeout:120s`，workbuddy 平台 `ChatStream` 走该 `HTTP` 做流式~~ → **已补齐**（同日 follow-up commit）：`upstream.Client` 增加 `StreamHTTP`（无总超时），`New()` 初始化，`ChatStream` 优先使用；回归测试 `internal/cnupstream/upstream/stream_timeout_repro_test.go` `TestChatStreamNotCutByClientTotalTimeout`（red→green→red 验证）。四渠道流式现全部走无总超时的 `StreamHTTP`。
 - 国产渠道 keepalive 依赖 `gateway.stream_keepalive_interval` 配置（默认 10s），确认生产配置已启用。
 
 ## RCA
