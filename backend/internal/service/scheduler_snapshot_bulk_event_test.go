@@ -27,6 +27,26 @@ func (r *bulkEventAccountRepo) GetByIDs(context.Context, []int64) ([]*Account, e
 	return append([]*Account(nil), r.accounts...), nil
 }
 
+func (r *bulkEventAccountRepo) schedulableAccounts() []Account {
+	out := make([]Account, 0, len(r.accounts))
+	for _, a := range r.accounts {
+		if a != nil && a.IsSchedulable() {
+			out = append(out, *a)
+		}
+	}
+	return out
+}
+
+func (r *bulkEventAccountRepo) ListSchedulable(context.Context) ([]Account, error) {
+	return r.schedulableAccounts(), nil
+}
+
+func (r *bulkEventAccountRepo) ListSchedulableByGroupID(_ context.Context, groupID int64) ([]Account, error) {
+	// 测试数据里账号 GroupIDs 已含目标组即可命中（composite 桶按组拉全平台账号）。
+	_ = groupID
+	return r.schedulableAccounts(), nil
+}
+
 type bulkEventSnapshotCache struct {
 	*batchSnapshotCache
 
@@ -96,6 +116,15 @@ func schedulerBucketsForTest(groupIDs []int64, platforms ...string) []SchedulerB
 				buckets = append(buckets, SchedulerBucket{GroupID: groupID, Platform: platform, Mode: SchedulerModeMixed})
 			}
 		}
+	}
+	return buckets
+}
+
+// compositeBucketsForTest 构造 composite 统一账号池桶（SchedulerModeComposite）的期望集合。
+func compositeBucketsForTest(groupIDs []int64) []SchedulerBucket {
+	buckets := make([]SchedulerBucket, 0, len(groupIDs))
+	for _, groupID := range groupIDs {
+		buckets = append(buckets, SchedulerBucket{GroupID: groupID, Platform: PlatformComposite, Mode: SchedulerModeComposite})
 	}
 	return buckets
 }
@@ -207,7 +236,9 @@ func TestSchedulerBulkAccountEventMissingAccountFallsBackToAllPlatforms(t *testi
 
 	require.NoError(t, err)
 	platforms := schedulerSnapshotPlatforms()
-	require.ElementsMatch(t, schedulerBucketsForTest([]int64{31, 32}, platforms[:]...), cache.capturedBuckets())
+	want := schedulerBucketsForTest([]int64{31, 32}, platforms[:]...)
+	want = append(want, compositeBucketsForTest([]int64{31, 32})...)
+	require.ElementsMatch(t, want, cache.capturedBuckets())
 	set, deleted := cache.accountWrites()
 	require.Equal(t, []int64{3}, set)
 	require.Equal(t, []int64{4}, deleted)
@@ -222,5 +253,7 @@ func TestSchedulerBulkAccountEventUnknownPlatformFallsBackToAllPlatforms(t *test
 
 	require.NoError(t, err)
 	platforms := schedulerSnapshotPlatforms()
-	require.ElementsMatch(t, schedulerBucketsForTest([]int64{41, 42}, platforms[:]...), cache.capturedBuckets())
+	want := schedulerBucketsForTest([]int64{41, 42}, platforms[:]...)
+	want = append(want, compositeBucketsForTest([]int64{41, 42})...)
+	require.ElementsMatch(t, want, cache.capturedBuckets())
 }

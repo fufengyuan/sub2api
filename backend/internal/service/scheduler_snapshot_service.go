@@ -821,6 +821,10 @@ func (s *SchedulerSnapshotService) rebuildByAccount(ctx context.Context, account
 		buckets = append(buckets, s.bucketsForPlatform(PlatformAnthropic, groupIDs, seen)...)
 		buckets = append(buckets, s.bucketsForPlatform(PlatformGemini, groupIDs, seen)...)
 	}
+	// 账号归属的 composite 统一账号池桶也必须重建：composite 桶不在 canonical/
+	// bucketsForPlatform 重建集合里，一旦首次写入缓存就不会随账号增删刷新，
+	// 新加入平台的账号（如 qwenwork）会因旧快照缺失而 503「No available accounts」。
+	buckets = append(buckets, s.compositeBucketsForGroups(groupIDs)...)
 	return s.rebuildBuckets(ctx, buckets, reason)
 }
 
@@ -859,7 +863,27 @@ func (s *SchedulerSnapshotService) rebuildByGroupIDs(ctx context.Context, groupI
 	for _, platform := range schedulerSnapshotPlatforms() {
 		buckets = append(buckets, s.bucketsForPlatform(platform, groupIDs, seen)...)
 	}
+	// 同上：composite 统一账号池桶随分组账号变更一并重建，避免旧缓存缺新账号。
+	buckets = append(buckets, s.compositeBucketsForGroups(groupIDs)...)
 	return s.rebuildBuckets(ctx, buckets, reason)
+}
+
+// compositeBucketsForGroups 为每个分组构造 composite 统一账号池桶
+//（SchedulerModeComposite）。该桶不在 canonical/bucketsForPlatform 的重建集合里，
+// 但 composite 分组没有平台概念，账号增删必须刷新整池缓存才能识别新平台账号。
+func (s *SchedulerSnapshotService) compositeBucketsForGroups(groupIDs []int64) []SchedulerBucket {
+	buckets := make([]SchedulerBucket, 0, len(groupIDs))
+	for _, gid := range groupIDs {
+		if gid <= 0 {
+			continue
+		}
+		buckets = append(buckets, SchedulerBucket{
+			GroupID:  gid,
+			Platform: PlatformComposite,
+			Mode:     SchedulerModeComposite,
+		})
+	}
+	return buckets
 }
 
 func (s *SchedulerSnapshotService) bucketsForPlatform(platform string, groupIDs []int64, seen map[batchSeenKey]struct{}) []SchedulerBucket {
