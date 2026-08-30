@@ -21,9 +21,14 @@ import (
 
 // Client QoderWork 上游客户端。
 type Client struct {
-	HTTP    *http.Client
-	Base    string // 业务 API，默认 https://openapi.qoder.com.cn
-	Gateway string // 推理网关，默认 https://gateway.qoder.com.cn
+	HTTP *http.Client
+	// StreamHTTP 供 ChatStream 流式转发使用：不设 http.Client.Timeout 总超时，
+	// 否则 SSE 流一旦持续超过 HTTP 的 Timeout（默认 180s）就会被 resp.Body 读取
+	// 强制中断（长推理/长输出必炸）。类比 traework 的 StreamHTTP。
+	// 为 nil 时回退到 HTTP。
+	StreamHTTP *http.Client
+	Base       string // 业务 API，默认 https://openapi.qoder.com.cn
+	Gateway    string // 推理网关，默认 https://gateway.qoder.com.cn
 
 	// lastModel 最近一次 chat 请求的客户端模型名（含 qoder/ 前缀），
 	// 注：仍是平台级共享——provider.Upstream.Stream/Aggregate 签名不带账号，
@@ -47,9 +52,10 @@ func NewWithTimeout(timeout time.Duration) *Client {
 		TLSNextProto:        map[string]func(string, *tls.Conn) http.RoundTripper{}, // 强制 HTTP/1.1
 	}
 	return &Client{
-		HTTP:    &http.Client{Timeout: timeout, Transport: tr},
-		Base:    OpenAPIBase,
-		Gateway: GatewayBase,
+		HTTP:       &http.Client{Timeout: timeout, Transport: tr},
+		StreamHTTP: &http.Client{Transport: tr},
+		Base:       OpenAPIBase,
+		Gateway:    GatewayBase,
 	}
 }
 
@@ -287,7 +293,11 @@ func (c *Client) ChatStream(a *auth.Auth, body []byte) (rc io.ReadCloser, status
 	if err := sess.ApplyHeaders(req, encoded, url, a.UID, true, modelKey); err != nil {
 		return nil, 0, nil, fmt.Errorf("cosy headers: %w", err)
 	}
-	resp, err := c.HTTP.Do(req)
+	hc := c.HTTP
+	if c.StreamHTTP != nil {
+		hc = c.StreamHTTP
+	}
+	resp, err := hc.Do(req)
 	if err != nil {
 		log.Printf("qoder chat_stream uid=%s model=%s: transport error: %v", a.UID, modelKey, err)
 		return nil, 0, nil, err

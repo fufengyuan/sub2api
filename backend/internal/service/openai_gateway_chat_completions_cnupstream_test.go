@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/Wei-Shaw/sub2api/internal/cnupstream/provider"
 	"github.com/Wei-Shaw/sub2api/internal/cnupstream/traework"
 
@@ -349,6 +350,8 @@ func TestForwardCnUpstreamHardCreditErrorHasNoBackoff(t *testing.T) {
 }
 
 // TestCnUpstreamFailoverErrorSoftRateFromBody HTTP 4xx + JSON 业务码（4028）也按软限流退避。
+// 软限流应映射为 429 + Retry-After，让 OpenAI 网关路径 mapUpstreamError(429) 返回
+// rate_limit_error，市面上 agent 客户端遇到 429 会自动重试（而非 502 不重试）。
 func TestCnUpstreamFailoverErrorSoftRateFromBody(t *testing.T) {
 	err := cnUpstreamFailoverError(&Account{Platform: PlatformTraeWork},
 		fmt.Errorf(`cnupstream: %s upstream error (http 400): {"code":4028,"message":"Your requests have exceeded the quota."}`, PlatformTraeWork))
@@ -357,5 +360,63 @@ func TestCnUpstreamFailoverErrorSoftRateFromBody(t *testing.T) {
 	}
 	if err.NextAccountRetryDelay != cnSoftRateSwitchBackoff {
 		t.Errorf("backoff=%v, want %v", err.NextAccountRetryDelay, cnSoftRateSwitchBackoff)
+	}
+	if err.StatusCode != http.StatusTooManyRequests {
+		t.Errorf("status=%d, want 429（上游频控应映射为通用 429 让 agent 自动重试）", err.StatusCode)
+	}
+	if retry := err.ResponseHeaders.Get("Retry-After"); retry == "" {
+		t.Errorf("429 必须携带 Retry-After，got %q", retry)
+	}
+}
+
+// TestForwardCnUpstreamStreamWritesKeepaliveBeforeFirstOutput 国产渠道流式路径在
+// 首个可见输出前必须向下游写 keepalive 心跳：长推理（思考数分钟无输出）期间若
+// 无任何字节写出，中间 nginx 的 proxy_read_timeout（600s）会按空闲把连接判死回
+// 504。这是本次 504 修复的核心断言——此前该路径完全没有 keepalive。
+func TestForwardCnUpstreamStreamWritesKeepaliveBeforeFirstOutput(t *testing.T) {
+	pr, pw := io.Pipe()
+	go func() {
+		// 首个 chunk 延迟 1.2s，超过 keepalive interval（1s）的首拍，让心跳先写出。
+		time.Sleep(1200 * time.Millisecond)
+		_, _ = pw.Write([]byte("data: {\"choices\":[{\"delta\":{\"content\":\"你好\"}}]}\n\n"))
+		_, _ = pw.Write([]byte("data: [DONE]\n\n"))
+		_ = pw.Close()
+	}()
+
+	svc := newCnGatewaySvc(func(_ string, _ int64, _ []byte) (*CnChatTarget, error) {
+		return &CnChatTarget{RC: pr, Status: http.StatusOK}, nil
+	})
+	svc.cfg = &config.Config{Gateway: config.GatewayConfig{StreamKeepaliveInterval: 1}}
+
+	rec, _, err := cnGatewayForward(t, svc, &Account{Platform: PlatformWorkBuddy},
+		[]byte(`{"model":"glm-5.2","stream":true,"messages":[]}`))
+	if err != nil {
+		t.Fatalf("forward: %v", err)
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, ": keepalive") {
+		t.Errorf("首个可见输出前未写出 keepalive 心跳（长推理会被 nginx 空闲超时判 504）: %q", body)
+	}
+	if !strings.Contains(body, "你好") {
+		t.Errorf("实际输出缺失: %q", body)
+	}
+}
+
+// TestCnUpstreamFailoverErrorSSEStreamSoftRate 未产出内容的 SSE 流内业务错误 4028
+// （ErrSoftRate）同样映射为 429 + Retry-After。这是国产渠道最常触发的频控路径。
+func TestCnUpstreamFailoverErrorSSEStreamSoftRate(t *testing.T) {
+	err := cnUpstreamFailoverError(&Account{Platform: PlatformTraeWork},
+		&traework.StreamBeforeOutputError{Se: &traework.SOLOStreamError{Code: 4028, Msg: "your requests are too frequent"}})
+	if err.Scope != GatewayFailureScopeAccount {
+		t.Errorf("scope=%v, want account", err.Scope)
+	}
+	if err.NextAccountRetryDelay != cnSoftRateSwitchBackoff {
+		t.Errorf("backoff=%v, want %v", err.NextAccountRetryDelay, cnSoftRateSwitchBackoff)
+	}
+	if err.StatusCode != http.StatusTooManyRequests {
+		t.Errorf("status=%d, want 429（SSE 流内 4028 频控应映射为通用 429）", err.StatusCode)
+	}
+	if retry := err.ResponseHeaders.Get("Retry-After"); retry == "" {
+		t.Errorf("429 必须携带 Retry-After，got %q", retry)
 	}
 }
