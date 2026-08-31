@@ -411,6 +411,8 @@ func registerAccountRoutes(admin *gin.RouterGroup, h *handler.Handlers, stepUpAu
 		accounts.POST("/batch-refresh", h.Admin.Account.BatchRefresh)
 
 		// 三渠道（workbuddy/traework/qoder）积分/签到/上游模型
+		accounts.GET("/cn-credits/summary", h.Admin.CNUpstream.CreditsSummary)
+		accounts.POST("/cn-credits/refresh", h.Admin.CNUpstream.RefreshCreditsBulk)
 		accounts.POST("/:id/credits/refresh", h.Admin.CNUpstream.RefreshCredits)
 		accounts.GET("/:id/credits/detail", h.Admin.CNUpstream.CreditsDetail)
 		accounts.POST("/:id/checkin", h.Admin.CNUpstream.Checkin)

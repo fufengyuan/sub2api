@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -28,6 +29,12 @@ import (
 // 其余能力（如 Update 持久化刷新后的凭证）通过可选的接口断言注入。
 type cnAccountRepo interface {
 	ListByPlatform(ctx context.Context, platform string) ([]Account, error)
+}
+
+// cnFilterAccountRepo 可选能力：按列表筛选条件返回全部国产渠道账号（不分页），
+// 供「按查询条件汇总积分 / 一键刷新积分」使用。AccountRepository 实现该接口。
+type cnFilterAccountRepo interface {
+	ListAllWithFilters(ctx context.Context, platform, accountType, status, search string, groupID int64, privacyMode string) ([]Account, error)
 }
 
 // cnUpdater 可选接口：若仓储实现 Update，则刷新 token 后回写 credentials。
@@ -495,6 +502,118 @@ func (s *CnUpstreamService) RefreshCredits(ctx context.Context, accountID int64)
 	}
 	s.persistCreditsRemain(ctx, acct, a.UID, remain, rt.pool)
 	return remain, nil
+}
+
+// cnCreditsRemainOf 取账号 credentials.creditsRemain 的数值；非 number 或缺失返回 (0, false)。
+func cnCreditsRemainOf(acct *Account) (int64, bool) {
+	if acct == nil || acct.Credentials == nil {
+		return 0, false
+	}
+	switch n := acct.Credentials["creditsRemain"].(type) {
+	case float64:
+		return int64(n), true
+	case int64:
+		return n, true
+	case int:
+		return int64(n), true
+	case json.Number:
+		if i, err := n.Int64(); err == nil {
+			return i, true
+		}
+	}
+	return 0, false
+}
+
+// filterAccountRepo 返回具备 ListAllWithFilters 能力的仓储；不可用返回 nil。
+func (s *CnUpstreamService) filterAccountRepo() cnFilterAccountRepo {
+	if s == nil || s.accountRepo == nil {
+		return nil
+	}
+	fr, _ := s.accountRepo.(cnFilterAccountRepo)
+	return fr
+}
+
+// CnCreditsFilter 一次国产渠道积分「按筛选条件」操作所需的查询条件（与账号列表筛选对齐）。
+type CnCreditsFilter struct {
+	Platform    string
+	AccountType string
+	Status      string
+	Search      string
+	GroupID     int64
+	PrivacyMode string
+}
+
+// listCnAccountsByFilter 枚举满足筛选条件的国产渠道账号；仓储不支持筛选能力时
+// 回退到按平台列举（此时忽略 platform 之外的其余筛选条件）。
+func (s *CnUpstreamService) listCnAccountsByFilter(ctx context.Context, f CnCreditsFilter) ([]Account, error) {
+	if fr := s.filterAccountRepo(); fr != nil {
+		accounts, err := fr.ListAllWithFilters(ctx, f.Platform, f.AccountType, f.Status, f.Search, f.GroupID, f.PrivacyMode)
+		if err != nil {
+			return nil, err
+		}
+		return accounts, nil
+	}
+	// 兜底：无筛选能力时按平台列举（保持既有行为，仅能覆盖单平台维度）。
+	platform := f.Platform
+	if platform == "" {
+		platform = PlatformWorkBuddy
+	}
+	return s.accountRepo.ListByPlatform(ctx, platform)
+}
+
+// isCnUpstreamPlatformAccount 判断账号是否属于国产多渠道（workbuddy/traework/qoder/qwenwork）。
+func isCnUpstreamPlatformAccount(acct *Account) bool {
+	if acct == nil {
+		return false
+	}
+	return IsCnUpstreamPlatform(acct.Platform)
+}
+
+// SummarizeCreditsByFilter 按列表筛选条件对满足条件的全部国产渠道账号的
+// credentials.creditsRemain 求和（全量口径，跨页），供积分列下方汇总展示。
+func (s *CnUpstreamService) SummarizeCreditsByFilter(ctx context.Context, f CnCreditsFilter) (total, counted int64, err error) {
+	accounts, err := s.listCnAccountsByFilter(ctx, f)
+	if err != nil {
+		return 0, 0, err
+	}
+	for i := range accounts {
+		if !isCnUpstreamPlatformAccount(&accounts[i]) {
+			continue
+		}
+		remain, ok := cnCreditsRemainOf(&accounts[i])
+		if !ok {
+			continue
+		}
+		total += remain
+		counted++
+	}
+	return total, counted, nil
+}
+
+// RefreshCreditsByFilter 按列表筛选条件对满足条件的全部国产渠道账号逐个刷新积分，
+// 返回成功/失败账号数。单账号刷新失败不中断整体流程。
+func (s *CnUpstreamService) RefreshCreditsByFilter(ctx context.Context, f CnCreditsFilter) (success, failed int, err error) {
+	accounts, err := s.listCnAccountsByFilter(ctx, f)
+	if err != nil {
+		return 0, 0, err
+	}
+	for i := range accounts {
+		if ctx.Err() != nil {
+			break
+		}
+		acct := &accounts[i]
+		if !isCnUpstreamPlatformAccount(acct) {
+			continue
+		}
+		if _, rerr := s.RefreshCredits(ctx, acct.ID); rerr != nil {
+			failed++
+			log.Printf("cnupstream: refresh credits by filter failed account=%d platform=%s err=%v",
+				acct.ID, acct.Platform, rerr)
+			continue
+		}
+		success++
+	}
+	return success, failed, nil
 }
 
 // ResourceDetail 查询单账号积分明细（实时查上游，不落库）。

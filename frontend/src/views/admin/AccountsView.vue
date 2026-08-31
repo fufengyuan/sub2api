@@ -475,14 +475,27 @@
           </template>
           <template #footer>
             <tr v-if="cnCreditsSummary.counted > 0" data-test="cn-credits-summary">
-              <td :colspan="100" class="px-3 py-2.5">
-                <div class="flex items-center justify-between gap-3">
+              <template v-for="idx in creditsPadCount" :key="idx">
+                <td class="px-3 py-2.5" :data-pad="idx" />
+              </template>
+              <td class="px-3 py-2.5">
+                <div class="flex items-center gap-1.5 whitespace-nowrap">
                   <span class="text-xs font-medium text-gray-600 dark:text-dark-300">
                     {{ t('admin.accounts.cnCredits.summary', { count: cnCreditsSummary.counted }) }}
                   </span>
                   <span class="font-mono text-sm font-semibold text-gray-900 dark:text-white">
                     {{ cnCreditsSummary.total.toLocaleString() }}
                   </span>
+                  <button
+                    v-if="cnCreditsSummary.counted > 0"
+                    @click.stop="handleRefreshAllCredits"
+                    :disabled="refreshingAllCredits"
+                    class="ml-1 inline-flex items-center gap-1 rounded-md border border-gray-300 px-1.5 py-0.5 text-[11px] font-medium text-gray-600 transition-colors hover:bg-gray-100 hover:text-cyan-600 disabled:cursor-not-allowed disabled:opacity-50 dark:border-dark-600 dark:text-gray-300 dark:hover:bg-dark-700 dark:hover:text-cyan-400"
+                    :title="t('admin.accounts.cnCredits.refreshAll')"
+                  >
+                    <Icon name="refresh" size="xs" :class="[refreshingAllCredits ? 'animate-spin' : '']" />
+                    <span>{{ t('admin.accounts.cnCredits.refreshAll') }}</span>
+                  </button>
                 </div>
               </td>
             </tr>
@@ -1209,6 +1222,7 @@ const load = async (options: AccountLoadOptions = {}) => {
     delete requestParams.lite
   }
   if (options.refreshTodayStats !== false) await refreshTodayStatsBatch()
+  await refreshCnCreditsSummary()
 }
 
 const reload = async () => {
@@ -1218,6 +1232,7 @@ const reload = async () => {
   pendingTodayStatsRefresh.value = false
   await baseReload()
   await refreshTodayStatsBatch()
+  await refreshCnCreditsSummary()
 }
 
 const buildUpstreamBillingRateFilters = () => {
@@ -2530,22 +2545,56 @@ const getCreditsRemain = (row: any) => {
   const remain = (row?.credentials as Record<string, unknown> | undefined)?.creditsRemain
   return typeof remain === 'number' ? remain : '-'
 }
-// 表格底部积分汇总：对当前列表页内 CN 渠道（workbuddy/traework/qoder/qwenwork）
-// 账号的 credentials.creditsRemain 求和。与列表所见一致（受筛选/分页影响），
-// 数据已随列表接口返回，纯前端计算。
-const cnCreditsSummary = computed(() => {
-  let total = 0
-  let counted = 0
-  for (const row of accounts.value) {
-    if (!isCnUpstreamRow(row)) continue
-    const remain = (row?.credentials as Record<string, unknown> | undefined)?.creditsRemain
-    if (typeof remain === 'number') {
-      total += remain
-      counted++
-    }
-  }
-  return { total, counted }
+// 积分列在当前可见列中的偏移（汇总行前插入空单元格，使汇总显示在积分列下方）。
+const creditsPadCount = computed(() => {
+  const idx = cols.value.findIndex(col => col.key === 'credits')
+  return Math.max(0, idx)
 })
+// 积分汇总：由后端接口按当前列表筛选条件（全量口径，跨页）计算，非前端求和。
+const cnCreditsSummary = ref({ total: 0, counted: 0 })
+const refreshingAllCredits = ref(false)
+const cnCreditsSummarySeq = ref(0)
+const buildCnCreditsFilterParams = () => ({
+  platform: params.platform || undefined,
+  type: params.type || undefined,
+  status: params.status || undefined,
+  search: params.search || undefined,
+  group: params.group || undefined,
+  privacy_mode: params.privacy_mode || undefined
+})
+const refreshCnCreditsSummary = async () => {
+  const seq = ++cnCreditsSummarySeq.value
+  try {
+    const summary = await adminAPI.accounts.getCnCreditsSummary(buildCnCreditsFilterParams())
+    if (seq !== cnCreditsSummarySeq.value) return
+    cnCreditsSummary.value = summary
+  } catch (error) {
+    if (seq !== cnCreditsSummarySeq.value) return
+    console.error('Failed to load CN credits summary:', error)
+  }
+}
+const handleRefreshAllCredits = async () => {
+  if (refreshingAllCredits.value) return
+  refreshingAllCredits.value = true
+  try {
+    const result = await adminAPI.accounts.refreshCnCreditsByFilter(buildCnCreditsFilterParams())
+    if (result.failed > 0) {
+      appStore.showWarning(t('admin.accounts.cnCredits.refreshAllPartial', {
+        success: result.success,
+        failed: result.failed
+      }))
+    } else {
+      appStore.showSuccess(t('admin.accounts.cnCredits.refreshAllSuccess', { count: result.success }))
+    }
+    // reload() 内部已重新拉取积分汇总，无需重复请求。
+    await reload()
+  } catch (error) {
+    console.error('Failed to refresh all CN credits:', error)
+    appStore.showError(extractApiErrorMessage(error, t('admin.accounts.cnCredits.refreshAllFailed')))
+  } finally {
+    refreshingAllCredits.value = false
+  }
+}
 const applyCreditsRemain = (a: Account, remain: number) => {
   if (!a.credentials) a.credentials = {}
   ;(a.credentials as Record<string, unknown>).creditsRemain = remain

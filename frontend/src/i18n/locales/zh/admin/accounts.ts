@@ -141,7 +141,11 @@ export default {
         detailExpiry: '到期时间',
         detailEmpty: '暂无积分明细',
         loading: '查询中…',
-        summary: 'CN 渠道积分汇总（{count} 个账号）'
+        summary: 'CN 渠道积分汇总（{count} 个账号）',
+        refreshAll: '一键刷新积分',
+        refreshAllSuccess: '已刷新 {count} 个账号积分',
+        refreshAllPartial: '刷新完成：成功 {success}，失败 {failed}',
+        refreshAllFailed: '一键刷新积分失败'
       },
       schedulerScore: {
         baseShort: '普通',

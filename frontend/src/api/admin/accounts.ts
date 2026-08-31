@@ -392,6 +392,40 @@ export async function refreshCnCredits(id: number): Promise<{ credits_remain: nu
   return data
 }
 
+/** CN 积分汇总按筛选条件的查询参数（与账号列表筛选对齐）。 */
+export interface CnCreditsFilterParams {
+  platform?: string
+  type?: string
+  status?: string
+  search?: string
+  group?: string
+  privacy_mode?: string
+}
+
+/**
+ * 按列表筛选条件汇总满足条件的全部国产渠道账号积分（全量口径，跨页）。
+ * @param filters - 与账号列表一致的筛选条件
+ * @returns 积分总和与参与汇总的账号数
+ */
+export async function getCnCreditsSummary(filters: CnCreditsFilterParams): Promise<{ total: number; counted: number }> {
+  const { data } = await apiClient.get<{ total: number; counted: number }>('/admin/accounts/cn-credits/summary', {
+    params: filters
+  })
+  return data
+}
+
+/**
+ * 按列表筛选条件一键刷新满足条件的全部国产渠道账号积分。
+ * @param filters - 与账号列表一致的筛选条件
+ * @returns 成功 / 失败账号数
+ */
+export async function refreshCnCreditsByFilter(filters: CnCreditsFilterParams): Promise<{ success: number; failed: number }> {
+  const { data } = await apiClient.post<{ success: number; failed: number }>('/admin/accounts/cn-credits/refresh', null, {
+    params: filters
+  })
+  return data
+}
+
 /**
  * Get the credit detail (per-package items) of a CN upstream account.
  * @param id - Account ID
@@ -1181,6 +1215,8 @@ export const accountsAPI = {
   startCnOAuth,
   getCnOAuthStatus,
   refreshCnCredits,
+  getCnCreditsSummary,
+  refreshCnCreditsByFilter,
   getCnCreditsDetail,
   checkinCnAccount,
   getCnUpstreamModels,

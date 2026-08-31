@@ -246,7 +246,11 @@ export default {
         detailExpiry: 'Expires At',
         detailEmpty: 'No credit details',
         loading: 'Loading…',
-        summary: 'CN channels credits total ({count} accounts)'
+        summary: 'CN channels credits total ({count} accounts)',
+        refreshAll: 'Refresh All',
+        refreshAllSuccess: 'Refreshed credits for {count} accounts',
+        refreshAllPartial: 'Refreshed: {success} success, {failed} failed',
+        refreshAllFailed: 'Failed to refresh all credits'
       },
       schedulerScore: {
         baseShort: 'Base',

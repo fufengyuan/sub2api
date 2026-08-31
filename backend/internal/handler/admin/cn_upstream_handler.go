@@ -2,6 +2,7 @@ package admin
 
 import (
 	"strconv"
+	"strings"
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/response"
 	"github.com/Wei-Shaw/sub2api/internal/service"
@@ -105,4 +106,58 @@ func (h *CnUpstreamHandler) UpstreamModels(c *gin.Context) {
 		return
 	}
 	response.Success(c, models)
+}
+
+// parseCnCreditsFilter 从查询参数解析国产渠道积分筛选条件（与账号列表筛选对齐）。
+func parseCnCreditsFilter(c *gin.Context) service.CnCreditsFilter {
+	f := service.CnCreditsFilter{
+		Platform:    strings.TrimSpace(c.Query("platform")),
+		AccountType: strings.TrimSpace(c.Query("type")),
+		Status:      strings.TrimSpace(c.Query("status")),
+		PrivacyMode: strings.TrimSpace(c.Query("privacy_mode")),
+	}
+	f.Search = strings.TrimSpace(c.Query("search"))
+	if len(f.Search) > 100 {
+		f.Search = f.Search[:100]
+	}
+	if groupStr := strings.TrimSpace(c.Query("group")); groupStr != "" {
+		if groupStr == "ungrouped" {
+			f.GroupID = service.AccountListGroupUngrouped
+		} else if id, err := strconv.ParseInt(groupStr, 10, 64); err == nil && id >= 0 {
+			f.GroupID = id
+		}
+	}
+	return f
+}
+
+// CreditsSummary 按列表筛选条件对满足条件的全部国产渠道账号积分求和（全量口径，跨页）。
+//
+//	GET /admin/accounts/cn-credits/summary
+func (h *CnUpstreamHandler) CreditsSummary(c *gin.Context) {
+	if h == nil || h.svc == nil {
+		response.InternalError(c, "cn upstream service is not enabled")
+		return
+	}
+	total, counted, err := h.svc.SummarizeCreditsByFilter(c.Request.Context(), parseCnCreditsFilter(c))
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	response.Success(c, gin.H{"total": total, "counted": counted})
+}
+
+// RefreshCreditsBulk 按列表筛选条件一键刷新满足条件的全部国产渠道账号积分，返回成功/失败数。
+//
+//	POST /admin/accounts/cn-credits/refresh
+func (h *CnUpstreamHandler) RefreshCreditsBulk(c *gin.Context) {
+	if h == nil || h.svc == nil {
+		response.InternalError(c, "cn upstream service is not enabled")
+		return
+	}
+	success, failed, err := h.svc.RefreshCreditsByFilter(c.Request.Context(), parseCnCreditsFilter(c))
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	response.Success(c, gin.H{"success": success, "failed": failed})
 }
