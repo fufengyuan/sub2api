@@ -258,6 +258,9 @@
           </tr>
         </template>
       </tbody>
+      <tfoot v-if="$slots.footer" class="table-footer border-t border-gray-200 bg-gray-50 dark:border-dark-700 dark:bg-dark-800">
+        <slot name="footer" />
+      </tfoot>
     </table>
   </div>
 </template>

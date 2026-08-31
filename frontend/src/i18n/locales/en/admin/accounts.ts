@@ -245,7 +245,8 @@ export default {
         detailRemainCol: 'Remaining',
         detailExpiry: 'Expires At',
         detailEmpty: 'No credit details',
-        loading: 'Loading…'
+        loading: 'Loading…',
+        summary: 'CN channels credits total ({count} accounts)'
       },
       schedulerScore: {
         baseShort: 'Base',

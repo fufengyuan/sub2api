@@ -140,7 +140,8 @@ export default {
         detailRemainCol: '剩余',
         detailExpiry: '到期时间',
         detailEmpty: '暂无积分明细',
-        loading: '查询中…'
+        loading: '查询中…',
+        summary: 'CN 渠道积分汇总（{count} 个账号）'
       },
       schedulerScore: {
         baseShort: '普通',

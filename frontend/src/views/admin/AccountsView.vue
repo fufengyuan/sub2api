@@ -473,6 +473,20 @@
               </button>
             </div>
           </template>
+          <template #footer>
+            <tr v-if="cnCreditsSummary.counted > 0" data-test="cn-credits-summary">
+              <td :colspan="100" class="px-3 py-2.5">
+                <div class="flex items-center justify-between gap-3">
+                  <span class="text-xs font-medium text-gray-600 dark:text-dark-300">
+                    {{ t('admin.accounts.cnCredits.summary', { count: cnCreditsSummary.counted }) }}
+                  </span>
+                  <span class="font-mono text-sm font-semibold text-gray-900 dark:text-white">
+                    {{ cnCreditsSummary.total.toLocaleString() }}
+                  </span>
+                </div>
+              </td>
+            </tr>
+          </template>
         </DataTable>
         </div>
       </template>
@@ -2516,6 +2530,22 @@ const getCreditsRemain = (row: any) => {
   const remain = (row?.credentials as Record<string, unknown> | undefined)?.creditsRemain
   return typeof remain === 'number' ? remain : '-'
 }
+// 表格底部积分汇总：对当前列表页内 CN 渠道（workbuddy/traework/qoder/qwenwork）
+// 账号的 credentials.creditsRemain 求和。与列表所见一致（受筛选/分页影响），
+// 数据已随列表接口返回，纯前端计算。
+const cnCreditsSummary = computed(() => {
+  let total = 0
+  let counted = 0
+  for (const row of accounts.value) {
+    if (!isCnUpstreamRow(row)) continue
+    const remain = (row?.credentials as Record<string, unknown> | undefined)?.creditsRemain
+    if (typeof remain === 'number') {
+      total += remain
+      counted++
+    }
+  }
+  return { total, counted }
+})
 const applyCreditsRemain = (a: Account, remain: number) => {
   if (!a.credentials) a.credentials = {}
   ;(a.credentials as Record<string, unknown>).creditsRemain = remain
