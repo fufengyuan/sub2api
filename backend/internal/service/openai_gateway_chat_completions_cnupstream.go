@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -288,6 +289,23 @@ func (s *OpenAIGatewayService) forwardCnUpstreamSinglePlatform(
 	}
 
 	// 非流式：聚合完整响应，抽取 usage，写 JSON。
+	//
+	// 聚合是「读完整个上游 SSE 才写响应」：长生成期间客户端零字节，中间 nginx
+	// 的 proxy_read_timeout 会按空闲把连接判死回 504（与流式 pre-output 同源）。
+	// 首个间隔超时后提交响应头并周期性写空白填充保活——JSON 解析器（RFC 8259）
+	// 普遍容忍 body 前导空白，空格填充对各类客户端最安全；填充字节已让响应
+	// 提交，聚合失败时不再走「未写出即换号」路径，与流式 keepalive 的 tradeoff
+	// 一致（此时错误应透出而非无限换号）。
+	//
+	// 写最终 JSON 前必须先停填充 goroutine（互斥锁建立 happens-before），
+	// 防止空格与 JSON 字节交错；defer 幂等兜底覆盖提前 return 的路径。
+	var stopPadding func()
+	if s.cfg != nil && s.cfg.Gateway.StreamKeepaliveInterval > 0 {
+		interval := time.Duration(s.cfg.Gateway.StreamKeepaliveInterval) * time.Second
+		stopPadding = s.startCnNonStreamJSONPadding(c, interval)
+		defer stopPadding()
+	}
+
 	agg, err := upstream.Aggregate(rc)
 	if err != nil {
 		target.Report(err)
@@ -301,8 +319,79 @@ func (s *OpenAIGatewayService) forwardCnUpstreamSinglePlatform(
 	if err != nil {
 		return nil, fmt.Errorf("cnupstream: marshal aggregated response: %w", err)
 	}
+	if stopPadding != nil {
+		stopPadding()
+	}
 	c.Data(http.StatusOK, "application/json", respJSON)
 	return buildResult(), nil
+}
+
+// startCnNonStreamJSONPadding 为非流式聚合启动下游空白填充保活，返回幂等的
+// 停止函数。首个 interval 超时后提交 200 + application/json 响应头并写一个
+// 空格，此后每 interval 续写；请求取消即退出。stop 与写入共用互斥锁，返回
+// 后不会再有字节写出，调用方可安全接管 ResponseWriter。
+func (s *OpenAIGatewayService) startCnNonStreamJSONPadding(c *gin.Context, interval time.Duration) func() {
+	if c == nil || c.Writer == nil || interval <= 0 {
+		return func() {}
+	}
+	var mu sync.Mutex
+	stopped := false
+	pad := func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		if stopped {
+			return false
+		}
+		w := c.Writer
+		if !w.Written() {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+		}
+		if _, err := w.WriteString(" "); err != nil {
+			stopped = true
+			return false
+		}
+		if f, ok := w.(http.Flusher); ok {
+			f.Flush()
+		}
+		return true
+	}
+	done := make(chan struct{})
+	stopCh := make(chan struct{})
+	var reqDone <-chan struct{}
+	if c.Request != nil {
+		reqDone = c.Request.Context().Done()
+	}
+	go func() {
+		defer close(done)
+		timer := time.NewTimer(interval)
+		defer timer.Stop()
+		for {
+			select {
+			case <-stopCh:
+				return
+			case <-reqDone:
+				return
+			case <-timer.C:
+			}
+			if !pad() {
+				return
+			}
+			timer.Reset(interval)
+		}
+	}()
+	return func() {
+		mu.Lock()
+		if stopped {
+			mu.Unlock()
+			<-done
+			return
+		}
+		stopped = true
+		mu.Unlock()
+		close(stopCh)
+		<-done
+	}
 }
 
 // cnInvokeChatStream 分发 ChatStream 调用：默认走 CnUpstreamService（以统一池

@@ -420,3 +420,45 @@ func TestCnUpstreamFailoverErrorSSEStreamSoftRate(t *testing.T) {
 		t.Errorf("429 必须携带 Retry-After，got %q", retry)
 	}
 }
+
+// TestForwardCnUpstreamNonStreamSendsPaddingDuringLongAggregate 国产渠道非流式
+// （stream:false）请求在长聚合期间必须向下游写出填充字节：聚合是「读完整个上游
+// SSE 才写响应」，长生成期间客户端零字节，中间 nginx 的 proxy_read_timeout 同样
+// 会按空闲判死回 504。JSON 解析器普遍容忍 body 前导空白，用空格填充最安全。
+func TestForwardCnUpstreamNonStreamSendsPaddingDuringLongAggregate(t *testing.T) {
+	pr, pw := io.Pipe()
+	go func() {
+		// 上游数据延迟 1.5s 到达，超过 keepalive interval（1s）首拍，让填充先写出。
+		time.Sleep(1500 * time.Millisecond)
+		_, _ = pw.Write([]byte("data: {\"id\":\"x\",\"choices\":[{\"message\":{\"role\":\"assistant\",\"content\":\"聚合结果\"},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":3,\"completion_tokens\":2}}\n\n"))
+		_, _ = pw.Write([]byte("data: [DONE]\n\n"))
+		_ = pw.Close()
+	}()
+
+	svc := newCnGatewaySvc(func(_ string, _ int64, _ []byte) (*CnChatTarget, error) {
+		return &CnChatTarget{RC: pr, Status: http.StatusOK}, nil
+	})
+	svc.cfg = &config.Config{Gateway: config.GatewayConfig{StreamKeepaliveInterval: 1}}
+
+	rec, _, err := cnGatewayForward(t, svc, &Account{Platform: PlatformWorkBuddy},
+		[]byte(`{"model":"glm-5.2","stream":false,"messages":[]}`))
+	if err != nil {
+		t.Fatalf("forward: %v", err)
+	}
+	if ct := rec.Header().Get("Content-Type"); !strings.Contains(ct, "application/json") {
+		t.Errorf("content-type=%q, want application/json", ct)
+	}
+	raw := rec.Body.String()
+	if !strings.Contains(raw, "聚合结果") {
+		t.Fatalf("聚合 JSON 缺失: %q", raw)
+	}
+	// json.Unmarshal 对前导空白容忍：先修掉填充再解析，同时断言填充确实存在。
+	trimmed := strings.TrimLeft(raw, " \t\r\n")
+	if len(trimmed) == len(raw) {
+		t.Errorf("长聚合期间未写出空白填充（非流式会被 nginx 空闲超时判 504）: %q", raw)
+	}
+	var parsed map[string]any
+	if err := json.Unmarshal([]byte(trimmed), &parsed); err != nil {
+		t.Fatalf("填充+JSON 响应体应可正常解析: %v (body=%q)", err, raw)
+	}
+}
