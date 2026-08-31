@@ -116,6 +116,7 @@
 
 - ~~`upstream.Client.HTTP`（[client.go:113](client.go)）仍 `Timeout:120s`，workbuddy 平台 `ChatStream` 走该 `HTTP` 做流式~~ → **已补齐**（同日 follow-up commit）：`upstream.Client` 增加 `StreamHTTP`（无总超时），`New()` 初始化，`ChatStream` 优先使用；回归测试 `internal/cnupstream/upstream/stream_timeout_repro_test.go` `TestChatStreamNotCutByClientTotalTimeout`（red→green→red 验证）。四渠道流式现全部走无总超时的 `StreamHTTP`。
 - 国产渠道 keepalive 依赖 `gateway.stream_keepalive_interval` 配置（默认 10s），确认生产配置已启用。
+- ~~非流式（stream:false）长聚合期间零字节，仍会被 nginx 空闲超时判 504~~ → **已补齐**（部署 0.1.184 后用户仍报 504+4028，定位为非流式路径遗漏）：`forwardCnUpstreamSinglePlatform` 非流式分支在 `Aggregate` 前启动 `startCnNonStreamJSONPadding`——首个 interval 超时后提交 `200 + application/json` 头并周期性写空格填充（RFC 8259 JSON 解析器容忍前导空白），聚合完成后先停填充再写最终 JSON（互斥锁 + stopCh 建立 happens-before，防字节交错）；回归测试 `TestForwardCnUpstreamNonStreamSendsPaddingDuringLongAggregate`（red→green→red）。
 
 ## RCA
 
