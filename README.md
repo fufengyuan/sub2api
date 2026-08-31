@@ -181,6 +181,7 @@ Sub2API is an AI API gateway platform designed to distribute and manage API quot
 ## Features
 
 - **Multi-Account Management** - Support multiple upstream account types (OAuth, API Key)
+- **CN Multi-Channel Upstreams** - Native support for workbuddy / traework / qoder / qwenwork subscription accounts with one-click OAuth, credit check-in, per-account model mapping, and unified-pool scheduling ([Design Notes](docs/platform-multi-channel-integration.md))
 - **API Key Distribution** - Generate and manage API Keys for users
 - **Precise Billing** - Token-level usage tracking and cost calculation
 - **Smart Scheduling** - Intelligent account selection with sticky sessions
@@ -188,7 +189,7 @@ Sub2API is an AI API gateway platform designed to distribute and manage API quot
 - **Rate Limiting** - Configurable request and token rate limits
 - **Built-in Payment System** - Supports EasyPay, Alipay, WeChat Pay, and Stripe for user self-service top-up, no separate payment service needed ([Configuration Guide](docs/PAYMENT.md))
 - **Admin Dashboard** - Web interface for monitoring and management
-- **Composite Groups** - Admin routing layer that resolves requested models to concrete providers for multi-provider groups ([Operator Guide](docs/COMPOSITE_GROUPS.md))
+- **Composite Groups** - Cross-platform unified account pool: one group schedules accounts across all platforms with no per-platform routing table; endpoint capability is determined by pool composition ([Operator Guide](docs/COMPOSITE_GROUPS.md))
 - **External System Integration** - Embed external systems (e.g. ticketing) via iframe to extend the admin dashboard
 
 ## Ecosystem
@@ -481,7 +482,7 @@ Build and run from source code for development or customization.
 
 #### Prerequisites
 
-- Go 1.21+
+- Go 1.27+
 - Node.js 18+
 - PostgreSQL 15+
 - Redis 7+
@@ -859,13 +860,14 @@ Antigravity accounts support optional **hybrid scheduling**. When enabled, the g
 ```
 sub2api/
 ├── backend/                  # Go backend service
-│   ├── cmd/server/           # Application entry
+│   ├── cmd/server/           # Application entry (Wire DI)
 │   ├── internal/             # Internal modules
 │   │   ├── config/           # Configuration
 │   │   ├── model/            # Data models
-│   │   ├── service/          # Business logic
+│   │   ├── service/          # Business logic (gateway forwarding, billing, scheduling)
 │   │   ├── handler/          # HTTP handlers
-│   │   └── gateway/          # API gateway core
+│   │   ├── repository/       # Data access (Ent + Redis cache)
+│   │   └── cnupstream/       # CN multi-channel upstream clients (workbuddy/traework/qoder/qwenwork)
 │   └── resources/            # Static resources
 │
 ├── frontend/                 # Vue 3 frontend

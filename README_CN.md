@@ -184,6 +184,7 @@ Sub2API 是一个 AI API 网关平台，用于分发和管理 AI 产品订阅的
 ## 核心功能
 
 - **多账号管理** - 支持多种上游账号类型（OAuth、API Key）
+- **国产多渠道上游** - 原生支持 workbuddy / traework / qoder / qwenwork 订阅账号：一键 OAuth 授权、积分查询与自动签到、账号级模型映射、统一池调度（[设计说明](docs/platform-multi-channel-integration.md)）
 - **API Key 分发** - 为用户生成和管理 API Key
 - **精确计费** - Token 级别的用量追踪和成本计算
 - **智能调度** - 智能账号选择，支持粘性会话
@@ -191,6 +192,7 @@ Sub2API 是一个 AI API 网关平台，用于分发和管理 AI 产品订阅的
 - **速率限制** - 可配置的请求和 Token 速率限制
 - **内置支付系统** - 支持 EasyPay 易支付、支付宝官方、微信官方、Stripe，用户自助充值，无需独立部署支付服务（[配置指南](docs/PAYMENT_CN.md)）
 - **管理后台** - Web 界面进行监控和管理
+- **Composite 统一账号池** - 跨平台统一账号池：同一分组下跨平台账号统一调度，无平台路由表，端点能力由池组成决定（[操作指南](docs/COMPOSITE_GROUPS.md)）
 - **外部系统集成** - 支持通过 iframe 嵌入外部系统（如工单等），扩展管理后台功能
 
 ## 生态项目
@@ -495,7 +497,7 @@ cd sub2api/deploy
 
 #### 前置条件
 
-- Go 1.21+
+- Go 1.27+
 - Node.js 18+
 - PostgreSQL 15+
 - Redis 7+
@@ -747,9 +749,10 @@ sub2api/
 │   ├── internal/             # 内部模块
 │   │   ├── config/           # 配置管理
 │   │   ├── model/            # 数据模型
-│   │   ├── service/          # 业务逻辑
+│   │   ├── service/          # 业务逻辑（网关转发、计费、调度）
 │   │   ├── handler/          # HTTP 处理器
-│   │   └── gateway/          # API 网关核心
+│   │   ├── repository/       # 数据访问（Ent + Redis 缓存）
+│   │   └── cnupstream/       # 国产多渠道上游客户端（workbuddy/traework/qoder/qwenwork）
 │   └── resources/            # 静态资源
 │
 ├── frontend/                 # Vue 3 前端
