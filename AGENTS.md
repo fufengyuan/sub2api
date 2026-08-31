@@ -18,6 +18,7 @@ AI API 网关平台，用于订阅配额分发。Go 后端 + Vue 3 前端，Post
 | `make build` | 编译前后端 |
 | `make build-backend` | 编译后端 → `backend/bin/server` |
 | `make build-frontend` | 编译前端 (pnpm) |
+| `cd backend && make build-linux` | **Linux amd64 部署包**，固定输出 → `backend/dist/server-linux-amd64`（脚本 `backend/scripts/build-linux-amd64.sh`，支持 `SUB2API_OUT` 覆盖） |
 | `make test` | 运行所有测试 |
 | `make test-backend` | `go test ./...` + `golangci-lint run ./...` |
 | `make test-frontend` | lint:check + typecheck + 关键 vitest 测试 |
@@ -29,6 +30,8 @@ AI API 网关平台，用于订阅配额分发。Go 后端 + Vue 3 前端，Post
 | `pnpm --dir frontend run dev` | 前端开发服务器 (Vite) |
 | `pnpm --dir frontend run lint` | 前端 ESLint 修复 |
 | `pnpm --dir frontend run typecheck` | 前端 TypeScript 类型检查 |
+
+> **打包注意**：`build-linux`（脚本 `backend/scripts/build-linux-amd64.sh`）**必须带 `-tags embed`**。前端页面经 `backend/internal/web/embed_on.go`（`//go:build embed`）的 `//go:embed dist` 在编译期打进二进制；漏掉该 tag 则 `frontendFS` 为空、页面 404。构建前先跑 `make build-frontend`（`pnpm --dir frontend run build`）产出最新 `internal/web/dist`。产物固定输出 `backend/dist/server-linux-amd64`。
 
 ## Architecture
 
