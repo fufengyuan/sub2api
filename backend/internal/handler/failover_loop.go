@@ -16,6 +16,10 @@ import (
 // GatewayService 隐式实现此接口。
 type TempUnscheduler interface {
 	TempUnscheduleRetryableError(ctx context.Context, accountID int64, failoverErr *service.UpstreamFailoverError)
+	// TempUnscheduleAccountSoftRate 在切换到下一个账号前，把刚被上游限流的
+	// 国产渠道账号写入临时不可调度窗口（TempUnschedulableUntil），使 composite
+	// 统一池在后续选号中直接跳过它而不反复重选，避免把换号预算耗在刚冷却的账号上。
+	TempUnscheduleAccountSoftRate(ctx context.Context, accountID int64)
 }
 
 // FailoverAction 表示 failover 错误处理后的下一步动作
@@ -267,6 +271,14 @@ func (s *FailoverState) HandleFailoverError(
 
 	// 加入失败列表
 	s.FailedAccountIDs[accountID] = struct{}{}
+
+	// 国产渠道软限流（429）：在切换前把该账号写入临时不可调度窗口（60s），
+	// 与 CN 账号池的冷却口径对齐，让 composite 统一池后续选号直接跳过它，
+	// 避免反复重选刚被限流的账号而耗尽换号预算（用户侧不再莫名报
+	// "All available accounts exhausted"）。
+	if service.IsCnUpstreamPlatform(platform) && failoverErr.StatusCode == http.StatusTooManyRequests {
+		gatewayService.TempUnscheduleAccountSoftRate(ctx, accountID)
+	}
 
 	// 检查是否耗尽
 	if s.SwitchCount >= s.MaxSwitches {

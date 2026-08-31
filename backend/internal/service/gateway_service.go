@@ -760,6 +760,24 @@ func (s *GatewayService) TempUnscheduleRetryableError(ctx context.Context, accou
 	}
 }
 
+// cnSoftRateTempUnscheduleCooldown 是国产渠道软限流（4008/4028 等 429）后
+// 写入账号临时不可调度字段的时长。与 CN 账号池的 CoolSoft=60s 对齐：让 composite
+// 统一池的调度快照（读 TempUnschedulableUntil）在快照刷新后直接跳过该账号，
+// 而不是反复把它当作健康账号重选、把单次请求的换号预算耗在刚被限流的账号上
+// （否则会出现「池里还有健康账号却报 All available accounts exhausted」）。
+func (s *GatewayService) TempUnscheduleAccountSoftRate(ctx context.Context, accountID int64) {
+	if s == nil || s.accountRepo == nil || accountID <= 0 {
+		return
+	}
+	until := time.Now().Add(60 * time.Second)
+	reason := "cn upstream 429 rate limited (auto temp-unschedule 60s)"
+	if err := s.accountRepo.SetTempUnschedulable(ctx, accountID, until, reason); err != nil {
+		slog.Warn("cn_softrate_temp_unschedule_failed", "account_id", accountID, "error", err)
+		return
+	}
+	slog.Info("cn_softrate_temp_unscheduled", "account_id", accountID, "until", until.UTC())
+}
+
 // GatewayService handles API gateway operations
 type GatewayService struct {
 	accountRepo           AccountRepository

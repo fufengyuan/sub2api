@@ -19,7 +19,8 @@ import (
 
 // mockTempUnscheduler 记录 TempUnscheduleRetryableError 的调用信息。
 type mockTempUnscheduler struct {
-	calls []tempUnscheduleCall
+	calls            []tempUnscheduleCall
+	softRateAccounts []int64
 }
 
 type tempUnscheduleCall struct {
@@ -29,6 +30,10 @@ type tempUnscheduleCall struct {
 
 func (m *mockTempUnscheduler) TempUnscheduleRetryableError(_ context.Context, accountID int64, failoverErr *service.UpstreamFailoverError) {
 	m.calls = append(m.calls, tempUnscheduleCall{accountID: accountID, failoverErr: failoverErr})
+}
+
+func (m *mockTempUnscheduler) TempUnscheduleAccountSoftRate(_ context.Context, accountID int64) {
+	m.softRateAccounts = append(m.softRateAccounts, accountID)
 }
 
 func TestSameAccountRetryDelayFor(t *testing.T) {
@@ -715,6 +720,30 @@ func TestHandleFailoverError_FailedAccountIDs(t *testing.T) {
 		action := fs.HandleFailoverError(context.Background(), mock, 100, "openai", maxSameAccountRetries, newTestFailoverErr(400, true, false))
 		require.Equal(t, FailoverContinue, action)
 		require.NotContains(t, fs.FailedAccountIDs, int64(100))
+	})
+
+	// 国产渠道软限流（429）：切换账号前应把该账号写入临时不可调度窗口，
+	// 让 composite 统一池后续选号跳过它，避免反复重选刚被限流的账号而
+	// 误报 "All available accounts exhausted"。非 CN 平台不触发。
+	t.Run("CN 软限流切换时标记临时不可调度", func(t *testing.T) {
+		mock := &mockTempUnscheduler{}
+		fs := NewFailoverState(3, false)
+		softRateErr := &service.UpstreamFailoverError{StatusCode: http.StatusTooManyRequests}
+
+		action := fs.HandleFailoverError(context.Background(), mock, 100, service.PlatformTraeWork, maxSameAccountRetries, softRateErr)
+		require.Equal(t, FailoverContinue, action)
+		require.Equal(t, []int64{100}, mock.softRateAccounts)
+		require.Contains(t, fs.FailedAccountIDs, int64(100))
+	})
+
+	t.Run("非 CN 平台的 429 不标记暂不可调度", func(t *testing.T) {
+		mock := &mockTempUnscheduler{}
+		fs := NewFailoverState(3, false)
+		softRateErr := &service.UpstreamFailoverError{StatusCode: http.StatusTooManyRequests}
+
+		action := fs.HandleFailoverError(context.Background(), mock, 100, "openai", maxSameAccountRetries, softRateErr)
+		require.Equal(t, FailoverContinue, action)
+		require.Empty(t, mock.softRateAccounts)
 	})
 
 	t.Run("同一账号多次切换不重复添加", func(t *testing.T) {
