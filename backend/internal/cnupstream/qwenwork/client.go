@@ -43,12 +43,15 @@ func New() *Client {
 }
 
 // NewWithTimeout 指定上游 HTTP 超时；配置连接池。
+// ResponseHeaderTimeout 120s 只约束「上游返回首个响应头」的等待，不设总 body
+// 超时——SSE 流一旦开始就可以持续超过该值而不会被掐断（见 StreamHTTP）。
 func NewWithTimeout(timeout time.Duration) *Client {
 	tr := &http.Transport{
-		MaxIdleConns:        100,
-		MaxIdleConnsPerHost: 20,
-		IdleConnTimeout:     90 * time.Second,
-		TLSNextProto:        map[string]func(string, *tls.Conn) http.RoundTripper{}, // 强制 HTTP/1.1
+		MaxIdleConns:          100,
+		MaxIdleConnsPerHost:   20,
+		IdleConnTimeout:       90 * time.Second,
+		ResponseHeaderTimeout: 120 * time.Second,
+		TLSNextProto:          map[string]func(string, *tls.Conn) http.RoundTripper{}, // 强制 HTTP/1.1
 	}
 	return &Client{
 		HTTP:       &http.Client{Timeout: timeout, Transport: tr},
