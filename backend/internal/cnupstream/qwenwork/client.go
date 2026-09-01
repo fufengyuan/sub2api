@@ -368,7 +368,10 @@ func (c *Client) UserResource(a *auth.Auth) (int64, error) {
 	return int64(*q.Data.Quota.Remaining), nil
 }
 
-// UserResourceDetail 查询积分明细：userQuota + addOnQuota 两个条目。
+// UserResourceDetail 查询积分明细：account-context 的 quota 聚合条目。
+// 千问办公上游 account-context 只保证返回 remaining（当前可用额度），total/used
+// 经常缺失。缺失时把 total 反推为 remaining，避免积分明细显示「总量=0」误导
+// （used 缺失时保持 0，因为已用无从得知）。
 func (c *Client) UserResourceDetail(a *auth.Auth) (int64, []provider.ResourceItem, error) {
 	q, err := c.accountContext(a)
 	if err != nil {
@@ -384,6 +387,10 @@ func (c *Client) UserResourceDetail(a *auth.Auth) (int64, []provider.ResourceIte
 	}
 	if quota.Remaining != nil {
 		remain = int64(*quota.Remaining)
+	}
+	// 上游只给 remaining 时，total 反推为 remaining（当前可用额度），used 保持 0。
+	if quota.Total == nil && quota.Remaining != nil {
+		total = remain
 	}
 	items := []provider.ResourceItem{{
 		Name:   "积分额度",
