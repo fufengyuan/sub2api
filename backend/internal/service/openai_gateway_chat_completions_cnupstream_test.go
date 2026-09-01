@@ -12,9 +12,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/Wei-Shaw/sub2api/internal/cnupstream/provider"
 	"github.com/Wei-Shaw/sub2api/internal/cnupstream/traework"
+	"github.com/Wei-Shaw/sub2api/internal/config"
 
 	"github.com/gin-gonic/gin"
 )
@@ -460,5 +460,51 @@ func TestForwardCnUpstreamNonStreamSendsPaddingDuringLongAggregate(t *testing.T)
 	var parsed map[string]any
 	if err := json.Unmarshal([]byte(trimmed), &parsed); err != nil {
 		t.Fatalf("填充+JSON 响应体应可正常解析: %v (body=%q)", err, raw)
+	}
+}
+
+// TestForwardCnUpstreamStreamKeepaliveDuringUpstreamConnectWait 国产渠道流式路径在
+// **上游 ChatStream 尚未返回（HTTP 建连/首包等待）期间**也必须向下游写 keepalive。
+//
+// 真实链路中 cnInvokeChatStream → qwenwork/qoder.StreamHTTP.Do() 是阻塞的（StreamHTTP
+// 无 Timeout / ResponseHeaderTimeout），若上游（或其 nginx）迟迟不回响应头，此调用
+// 会卡住；而旧实现只在 ChatStream 返回后才启动 keepalive，导致建连等待期间客户端
+// 零字节 → 中间 nginx 判死回 504。本测试模拟 ChatStream 阻塞后返回，断言等待期间
+// 心跳已写出。
+func TestForwardCnUpstreamStreamKeepaliveDuringUpstreamConnectWait(t *testing.T) {
+	pr, pw := io.Pipe()
+	started := make(chan struct{})
+	svc := newCnGatewaySvc(func(_ string, _ int64, _ []byte) (*CnChatTarget, error) {
+		close(started)
+		// 模拟上游建连/首包等待：阻塞 1.2s 后才返回响应流，超过 keepalive interval(1s)。
+		time.Sleep(1200 * time.Millisecond)
+		return &CnChatTarget{RC: pr, Status: http.StatusOK}, nil
+	})
+	svc.cfg = &config.Config{Gateway: config.GatewayConfig{StreamKeepaliveInterval: 1}}
+
+	done := make(chan struct{})
+	var rec *httptest.ResponseRecorder
+	go func() {
+		defer close(done)
+		<-started
+		// 等 keepalive 首拍（1s）落定后再写首个 chunk，确保心跳先于内容写出。
+		time.Sleep(1100 * time.Millisecond)
+		_, _ = pw.Write([]byte("data: {\"choices\":[{\"delta\":{\"content\":\"你好\"}}]}\n\n"))
+		_, _ = pw.Write([]byte("data: [DONE]\n\n"))
+		_ = pw.Close()
+	}()
+	var r, _, err = cnGatewayForward(t, svc, &Account{Platform: PlatformWorkBuddy},
+		[]byte(`{"model":"deepseek-v4-flash","stream":true,"messages":[]}`))
+	<-done
+	rec = r
+	if err != nil {
+		t.Fatalf("forward: %v", err)
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, ": keepalive") {
+		t.Errorf("上游建连等待期间未写出 keepalive 心跳（等待期客户端零字节会被 nginx 判 504）: %q", body)
+	}
+	if !strings.Contains(body, "你好") {
+		t.Errorf("实际输出缺失: %q", body)
 	}
 }

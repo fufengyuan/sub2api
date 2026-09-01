@@ -203,6 +203,36 @@ func (s *OpenAIGatewayService) forwardCnUpstreamSinglePlatform(
 		return nil, fmt.Errorf("cnupstream: service not wired")
 	}
 	platform := account.Platform
+
+	// 启动下游保活，覆盖「上游 ChatStream 尚未返回」的建连/首包等待期。
+	//
+	// 真实链路 cnInvokeChatStream → qwenwork/qoder.StreamHTTP.Do() 是阻塞的
+	// （StreamHTTP 无 Timeout/ResponseHeaderTimeout）。若上游（或其 nginx）迟迟
+	// 不回响应头，旧实现只在此调用返回后才启动 keepalive/padding，导致等待期间
+	// 客户端零字节 → 中间 nginx 空闲超时判 504。这里把保活提前到上游调用之前，
+	// 让建连等待期也有字节写出。
+	//
+	// 权衡：首拍延迟一个 interval（默认 10s），绝大多数硬错误（鉴权/参数/限流）
+	// 在此之前返回，仍走正常 failover/状态码链路；仅当等待超过一个 interval 时
+	// 才提交 200 头——这正是要保住的 504 场景。
+	//
+	// 关键：cnUsageCapturingWriter 必须包裹保活启动【之前】的原始 writer，而非
+	// 被替换后的包装器——否则 Stream 内首次访问 w.Header() 会触发包装器的
+	// suspend()，在首拍前就把心跳停掉。
+	originalWriter := c.Writer
+	stopKeepalive := func() {}
+	stopPadding := func() {}
+	if s.cfg != nil && s.cfg.Gateway.StreamKeepaliveInterval > 0 {
+		interval := time.Duration(s.cfg.Gateway.StreamKeepaliveInterval) * time.Second
+		if reqStream {
+			stopKeepalive = startOpenAISSEKeepalive(c, interval)
+		} else {
+			stopPadding = s.startCnNonStreamJSONPadding(c, interval)
+		}
+	}
+	defer stopKeepalive()
+	defer stopPadding()
+
 	target, err := s.cnInvokeChatStream(platform, account.ID, forwardBody)
 	if err != nil {
 		// 传输层失败 / 整池冷却：未写出任何响应，交由 handler 排除本账号重选。
@@ -248,24 +278,10 @@ func (s *OpenAIGatewayService) forwardCnUpstreamSinglePlatform(
 	}
 
 	if reqStream {
-		// 首个可见输出之前启动下游 keepalive 心跳：国产渠道路径此前完全依赖
-		// 上游推送，长推理（思考数分钟无输出）期间下游一个字节都收不到，中间
-		// nginx 的 proxy_read_timeout（600s）会按空闲把连接判死回 504。复用
-		// standard passthrough 的 startOpenAISSEKeepalive：心跳写 SSE 注释行
-		// 并提交响应头，刷新 nginx 读超时；首拍延迟一个 interval，绝大多数
-		// 硬错误在此之前返回，仍走正常 failover/状态码链路。心跳字节由
-		// OpenAICompactKeepaliveAdjustedWrittenSize 排除，不影响 cw.written 计数。
-		//
-		// 关键：cnUsageCapturingWriter 必须包裹 keepalive 启动【之前】的原始
-		// writer，而非被替换后的包装器——否则 Stream 内首次访问 w.Header() 会触发
+		// keepalive 已在函数顶部（cnInvokeChatStream 之前）启动，覆盖上游建连等待期。
+		// cnUsageCapturingWriter 必须包裹 keepalive 启动【之前】的原始 writer，
+		// 而非被替换后的包装器——否则 Stream 内首次访问 w.Header() 会触发
 		// openAICompactKeepaliveWriter.Header() 的 suspend()，在首拍前就把心跳停掉。
-		originalWriter := c.Writer
-		stopKeepalive := func() {}
-		if s.cfg != nil && s.cfg.Gateway.StreamKeepaliveInterval > 0 {
-			stopKeepalive = startOpenAISSEKeepalive(c,
-				time.Duration(s.cfg.Gateway.StreamKeepaliveInterval)*time.Second)
-		}
-		defer stopKeepalive()
 		cw := newCnUsageCapturingWriter(originalWriter, &usage)
 		// 已产出内容时 StreamWithError 返回 nil，业务错误只能从回调里拿；
 		// 两种情况都要回灌冷却，否则同一个被限流的账号会被反复选中。
@@ -299,13 +315,7 @@ func (s *OpenAIGatewayService) forwardCnUpstreamSinglePlatform(
 	//
 	// 写最终 JSON 前必须先停填充 goroutine（互斥锁建立 happens-before），
 	// 防止空格与 JSON 字节交错；defer 幂等兜底覆盖提前 return 的路径。
-	var stopPadding func()
-	if s.cfg != nil && s.cfg.Gateway.StreamKeepaliveInterval > 0 {
-		interval := time.Duration(s.cfg.Gateway.StreamKeepaliveInterval) * time.Second
-		stopPadding = s.startCnNonStreamJSONPadding(c, interval)
-		defer stopPadding()
-	}
-
+	// 填充已在函数顶部（cnInvokeChatStream 之前）启动，覆盖上游建连等待期。
 	agg, err := upstream.Aggregate(rc)
 	if err != nil {
 		target.Report(err)
@@ -319,9 +329,7 @@ func (s *OpenAIGatewayService) forwardCnUpstreamSinglePlatform(
 	if err != nil {
 		return nil, fmt.Errorf("cnupstream: marshal aggregated response: %w", err)
 	}
-	if stopPadding != nil {
-		stopPadding()
-	}
+	stopPadding()
 	c.Data(http.StatusOK, "application/json", respJSON)
 	return buildResult(), nil
 }
