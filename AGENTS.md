@@ -84,4 +84,5 @@ frontend/
 
 ## Notes
 
-(预留，后续可添加)
+- **国产渠道上游监控（workbuddy-wild / wild-work）**: sub2api 的国产渠道（workbuddy/traework/qoder/qwenwork）功能是从 **wild-work 原仓库 `github.com/rockswang/wild-work`** 合并来的，逆向调用接口容易因上游协议/接口变动失效，**必须定期检查其更新并评估同步到 `backend/internal/cnupstream`**。本地镜像在 `/Users/duormi/workspace/workbuddy-wild`（当前分支 master，领先上游若干 commit，含 qwenwork 图片多模态等本地增强）。**⚠️ 拉取上游用直连 `upstream` remote（`https://github.com/rockswang/wild-work.git`），不要用 `origin`（`ghproxy.net` 代理，其 SSL 证书已过期导致 fetch 失败）**。已配置每日 09:00 定时任务「每日检查上游更新」执行 `git fetch upstream` + 只读对比报告（只报告不自动合并）。
+
