@@ -209,7 +209,8 @@ func (c *Client) FetchModels(a *auth.Auth) ([]provider.ModelInfo, error) {
 		ConfigInfoList []struct {
 			ConfigName    string `json:"config_name"`
 			DisplayConfig struct {
-				DisplayName string `json:"display_name"`
+				DisplayName    string `json:"display_name"`
+				IsCustomModel  bool   `json:"is_custom_model"`
 			} `json:"display_config"`
 		} `json:"config_info_list"`
 	}
@@ -217,11 +218,15 @@ func (c *Client) FetchModels(a *auth.Auth) ([]provider.ModelInfo, error) {
 		return nil, fmt.Errorf("models parse: %w", err)
 	}
 	// 按 config_name 去重：上游可能为同一模型返回流式/非流式两条配置。
+	// 过滤掉账号自定义模型（display_config.is_custom_model=true，如用户手动在
+	// Trae 里添加的 deepseek-v4-flash/hy4-preview 等）：这类模型只对配置它的账号
+	// 可见，不具备跨账号可用性，若被填进 model_mapping 会转发到其他账号时 4001。
+	// 注意不能按 custom_model_ 前缀过滤——官方模板占位也是该前缀但 is_custom_model=false。
 	seen := make(map[string]bool, len(resp.ConfigInfoList))
 	out := make([]provider.ModelInfo, 0, len(resp.ConfigInfoList))
 	for _, cfg := range resp.ConfigInfoList {
 		name := strings.TrimSpace(cfg.ConfigName)
-		if name == "" || seen[name] {
+		if name == "" || seen[name] || cfg.DisplayConfig.IsCustomModel {
 			continue
 		}
 		seen[name] = true

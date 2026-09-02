@@ -119,3 +119,51 @@ func TestCheckinClaimRetriesRateLimit(t *testing.T) {
 		t.Fatalf("claim calls=%d", calls.Load())
 	}
 }
+
+func TestFetchModelsFiltersCustomModels(t *testing.T) {
+	// 上游 get_detail_param 返回里带 display_config.is_custom_model：
+	//   - 官方模型 is_custom_model=false（即使 config_name 是 custom_model_ 前缀的模板占位）
+	//   - 账号自定义模型 is_custom_model=true（如 deepseek-v4-flash/hy4-preview，只对配置它的账号可见）
+	// FetchModels 必须过滤掉 is_custom_model=true 的模型，否则会被填进 model_mapping
+	// 转发到没有该自定义模型的其他账号时上游 4001。
+	payload := `{"config_info_list":[
+		{"config_name":"DeepSeek-V4-Flash-Official","display_config":{"display_name":"DeepSeek-V4-Flash 正式版","is_custom_model":false}},
+		{"config_name":"DeepSeek-V4-Flash","display_config":{"display_name":"DeepSeek-V4-Flash","is_custom_model":false}},
+		{"config_name":"custom_model_deepseek_v4","display_config":{"display_name":"","is_custom_model":false}},
+		{"config_name":"deepseek-v4-flash","display_config":{"display_name":"deepseek-v4-flash","is_custom_model":true}},
+		{"config_name":"hy4-preview","display_config":{"display_name":"hy4-preview","is_custom_model":true}}
+	]}`
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != EpModels {
+			http.NotFound(w, r)
+			return
+		}
+		_, _ = w.Write([]byte(payload))
+	}))
+	defer srv.Close()
+
+	c := New()
+	c.HTTP = srv.Client()
+	c.AgentHost = srv.URL
+	models, err := c.FetchModels(&auth.Auth{AccessToken: "at"})
+	if err != nil {
+		t.Fatalf("FetchModels: %v", err)
+	}
+	want := map[string]bool{"DeepSeek-V4-Flash-Official": true, "DeepSeek-V4-Flash": true, "custom_model_deepseek_v4": true}
+	for _, m := range models {
+		if _, ok := want[m.ID]; !ok {
+			t.Errorf("unexpected model returned: %q", m.ID)
+		}
+		delete(want, m.ID)
+	}
+	for _, forbidden := range []string{"deepseek-v4-flash", "hy4-preview"} {
+		for _, m := range models {
+			if m.ID == forbidden {
+				t.Errorf("custom model %q should have been filtered", forbidden)
+			}
+		}
+	}
+	if len(want) != 0 {
+		t.Errorf("missing expected models: %v", want)
+	}
+}
