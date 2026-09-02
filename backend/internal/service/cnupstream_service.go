@@ -297,6 +297,11 @@ func applyCnCooldown(p *pool.Pool, uid string, kind provider.ErrKind) {
 	case provider.ErrServer:
 		p.Cooldown(uid, pool.CoolErr, 2*time.Minute, "server error")
 		log.Printf("cnupstream cooldown uid=%s kind=server action=cooldown 2m", uid)
+	case provider.ErrRequest:
+		// 请求本身有问题（上下文超限/参数非法）：账号是健康的，换号必然复现。
+		// 记错会让池内账号逐个累积 errCount，最终把整个渠道拖进冷却——这正是
+		// 「一个超长请求打挂整个平台」的成因，因此这里必须完全不动账号状态。
+		log.Printf("cnupstream cooldown uid=%s kind=request action=none (request-scoped, account healthy)", uid)
 	default:
 		p.NoteError(uid, 3, 5*time.Minute)
 		log.Printf("cnupstream cooldown uid=%s kind=default action=note_error 3x5m", uid)

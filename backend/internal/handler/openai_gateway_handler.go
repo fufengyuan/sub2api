@@ -3105,6 +3105,19 @@ func (h *OpenAIGatewayHandler) handleFailoverExhausted(c *gin.Context, failoverE
 		)
 		return
 	}
+	if failoverErr.Reason == service.CnRequestScopedFailureReason {
+		message := strings.TrimSpace(failoverErr.ClientMessage)
+		if message == "" {
+			message = "The upstream rejected the request. Please adjust your request and retry."
+		}
+		status := failoverErr.ClientStatusCode
+		if status <= 0 {
+			status = http.StatusBadRequest
+		}
+		service.SetOpsUpstreamError(c, status, message, string(failoverErr.ResponseBody))
+		h.handleStreamingAwareError(c, status, "invalid_request_error", message, streamStarted)
+		return
+	}
 	if failoverErr.Reason == service.OpenAIHTTPContinuationUnsupportedReason {
 		message := strings.TrimSpace(failoverErr.ClientMessage)
 		if message == "" {

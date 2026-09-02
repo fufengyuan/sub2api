@@ -32,6 +32,9 @@ const (
 	ErrNotFound                   // 404 上游偶发 → 短冷却不累计 errCount
 	ErrServer                     // 5xx 上游故障
 	ErrClient                     // 其他 4xx / 业务错误
+	// ErrRequest 请求本身有问题（上下文超限、参数非法等）：换号与冷却都无济于事，
+	// 重试只会把池内账号逐个记错而污染健康度。应直接把失败返回客户端。
+	ErrRequest
 )
 
 func (k ErrKind) String() string {
@@ -48,6 +51,8 @@ func (k ErrKind) String() string {
 		return "server"
 	case ErrClient:
 		return "client"
+	case ErrRequest:
+		return "request"
 	default:
 		return "none"
 	}

@@ -89,6 +89,50 @@ func (s *OpenAIGatewayService) forwardCnUpstreamChatCompletions(
 // 两次，见 FailoverState.maxDeferredSwitchBackoffs）。
 const cnSoftRateSwitchBackoff = 2 * time.Second
 
+// CnRequestScopedFailureReason 标记「请求本身有问题」的 CN 上游失败（4026 上下文
+// 超限 / 4001 参数非法等）。handler 据此下发 400 + 明确文案而非 502。
+const CnRequestScopedFailureReason = GatewayFailureReason("cnupstream_request_scoped")
+
+// cnRequestScopedClientMessage 生成下发给客户端的可操作错误信息。上下文超限是
+// agent 类客户端最常见的可自愈错误，按 OpenAI 协议返回 context_length_exceeded，
+// 让客户端能据此压缩历史后重试，而不是收到一个含糊的 upstream_error。
+func cnRequestScopedClientMessage(soloErr *traework.SOLOStreamError) string {
+	if soloErr == nil {
+		return "The request was rejected by the upstream because it is invalid. Please adjust your request and retry."
+	}
+	if isContextLengthExceeded(soloErr) {
+		return fmt.Sprintf(
+			"This request exceeds the maximum context length supported by the model (%s). Please reduce the input length or history and retry.",
+			strings.TrimSpace(soloErr.Msg),
+		)
+	}
+	msg := strings.TrimSpace(soloErr.Msg)
+	if msg == "" {
+		return fmt.Sprintf("The upstream rejected the request (code %d). Please adjust your request and retry.", soloErr.Code)
+	}
+	return fmt.Sprintf("The upstream rejected the request (code %d): %s", soloErr.Code, msg)
+}
+
+// isContextLengthExceeded 判断业务错误是否为上下文超限：优先认业务码 4026，
+// 其次按文案兜底（不同上游码可能不同，但文案含义明确）。匹配串需足够具体，
+// 避免把「上下文已失效」这类账号级错误误判成请求级。
+func isContextLengthExceeded(soloErr *traework.SOLOStreamError) bool {
+	if soloErr.Code == 4026 {
+		return true
+	}
+	lower := strings.ToLower(soloErr.Msg)
+	for _, marker := range []string{
+		"context length", "context_length", "maximum context length", "context window",
+		"prompt is too long", "input is too long", "too many tokens",
+		"上下文长度", "上下文超长", "上下文过长", "超出上下文", "输入超长", "输入过长",
+	} {
+		if strings.Contains(lower, marker) {
+			return true
+		}
+	}
+	return false
+}
+
 // cnUpstreamFailoverError 把 CN 上游失败包装为 UpstreamFailoverError：
 // 统一账号池下失败账号交由 handler failover 循环排除重选（8 次保险丝）。
 //   - 整池冷却（*CnPoolExhaustedError）：按 429 + Retry-After 返回，让客户端
@@ -117,7 +161,22 @@ func cnUpstreamFailoverError(account *Account, err error) *UpstreamFailoverError
 		}
 	} else if soloErr := cnSoloStreamError(err); soloErr != nil {
 		scope = GatewayFailureScopeAccount
-		if soloErr.Kind() == provider.ErrSoftRate {
+		switch soloErr.Kind() {
+		case provider.ErrRequest:
+			// 请求本身有问题（4026 上下文超限 / 4001 参数非法）：换号必然复现，
+			// 继续 failover 只会把池内账号逐个记错。立即停止换号，把可操作的
+			// 错误直接交给客户端（直接返回，不再走下方通用包装）。
+			return &UpstreamFailoverError{
+				StatusCode:        http.StatusBadRequest,
+				ClientStatusCode:  http.StatusBadRequest,
+				ClientMessage:     cnRequestScopedClientMessage(soloErr),
+				Stage:             GatewayFailureStageInference,
+				Scope:             GatewayFailureScopeRequest,
+				Reason:            CnRequestScopedFailureReason,
+				ResponseBody:      []byte(err.Error()),
+				NextAccountAction: NextAccountStop,
+			}
+		case provider.ErrSoftRate:
 			backoff = cnSoftRateSwitchBackoff
 			status = http.StatusTooManyRequests
 			headers = http.Header{"Retry-After": []string{strconv.Itoa(int(math.Ceil(cnSoftRateSwitchBackoff.Seconds())))}}

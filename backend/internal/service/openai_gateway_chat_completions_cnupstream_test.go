@@ -349,6 +349,80 @@ func TestForwardCnUpstreamHardCreditErrorHasNoBackoff(t *testing.T) {
 	}
 }
 
+// TestCnUpstreamFailoverErrorRequestScopedStopsSwitching 4026 上下文超限属请求本身
+// 的问题：换号必然复现，继续 failover 只会把池内账号逐个记错而拖垮整个渠道。
+// 因此必须 ① 立即停止换号 ② 按 400 下发可操作的错误文案。
+func TestCnUpstreamFailoverErrorRequestScopedStopsSwitching(t *testing.T) {
+	err := cnUpstreamFailoverError(&Account{Platform: PlatformTraeWork},
+		&traework.StreamBeforeOutputError{Se: &traework.SOLOStreamError{
+			Code: 4026,
+			Msg:   "We're sorry, your context length has exceeded the maximum limit.",
+		}})
+	if err.NextAccountAction != NextAccountStop {
+		t.Errorf("NextAccountAction=%v, want NextAccountStop（请求级错误不得换号重试）", err.NextAccountAction)
+	}
+	if err.ShouldRetryNextAccount() {
+		t.Error("ShouldRetryNextAccount() = true, want false")
+	}
+	if err.StatusCode != http.StatusBadRequest {
+		t.Errorf("status=%d, want 400", err.StatusCode)
+	}
+	if err.ClientStatusCode != http.StatusBadRequest {
+		t.Errorf("ClientStatusCode=%d, want 400", err.ClientStatusCode)
+	}
+	if err.Scope != GatewayFailureScopeRequest {
+		t.Errorf("scope=%v, want request（不把账算到健康账号头上）", err.Scope)
+	}
+	if err.Reason != CnRequestScopedFailureReason {
+		t.Errorf("reason=%v, want %v", err.Reason, CnRequestScopedFailureReason)
+	}
+	if !strings.Contains(err.ClientMessage, "context length") {
+		t.Errorf("ClientMessage=%q, want 含上下文超限提示，让客户端可据此压缩历史", err.ClientMessage)
+	}
+	if err.NextAccountRetryDelay != 0 {
+		t.Errorf("backoff=%v, want 0（不换号也就无需退避）", err.NextAccountRetryDelay)
+	}
+}
+
+// TestCnUpstreamFailoverErrorInvalidParamStopsSwitching 4001 参数非法同样是请求级：
+// 换号无用，不得污染账号健康度。
+func TestCnUpstreamFailoverErrorInvalidParamStopsSwitching(t *testing.T) {
+	err := cnUpstreamFailoverError(&Account{Platform: PlatformTraeWork},
+		&traework.StreamBeforeOutputError{Se: &traework.SOLOStreamError{
+			Code: 4001,
+			Msg:   "We're sorry, the param is invalid. Please try with a valid param.",
+		}})
+	if err.NextAccountAction != NextAccountStop {
+		t.Errorf("NextAccountAction=%v, want NextAccountStop", err.NextAccountAction)
+	}
+	if err.ClientStatusCode != http.StatusBadRequest {
+		t.Errorf("ClientStatusCode=%d, want 400", err.ClientStatusCode)
+	}
+	if !strings.Contains(err.ClientMessage, "4001") {
+		t.Errorf("ClientMessage=%q, want 带上业务码便于排查", err.ClientMessage)
+	}
+}
+
+// TestCnRequestScopedClientMessage 文案生成：上下文超限走 context_length_exceeded
+// 语义，其余请求级错误保留上游业务码与原文。
+func TestCnRequestScopedClientMessage(t *testing.T) {
+	got := cnRequestScopedClientMessage(&traework.SOLOStreamError{Code: 4026, Msg: "context length exceeded"})
+	if !strings.Contains(got, "maximum context length") {
+		t.Errorf("got=%q, want 上下文超限语义", got)
+	}
+	got = cnRequestScopedClientMessage(&traework.SOLOStreamError{Code: 4001, Msg: "bad param"})
+	if !strings.Contains(got, "4001") || !strings.Contains(got, "bad param") {
+		t.Errorf("got=%q, want 含业务码与上游原文", got)
+	}
+	got = cnRequestScopedClientMessage(&traework.SOLOStreamError{Code: 7001, Msg: ""})
+	if !strings.Contains(got, "7001") {
+		t.Errorf("got=%q, want 空文案时仍带业务码", got)
+	}
+	if got := cnRequestScopedClientMessage(nil); got == "" {
+		t.Error("nil 输入应返回兜底文案")
+	}
+}
+
 // TestCnUpstreamFailoverErrorSoftRateFromBody HTTP 4xx + JSON 业务码（4028）也按软限流退避。
 // 软限流应映射为 429 + Retry-After，让 OpenAI 网关路径 mapUpstreamError(429) 返回
 // rate_limit_error，市面上 agent 客户端遇到 429 会自动重试（而非 502 不重试）。

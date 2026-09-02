@@ -17,21 +17,38 @@ import (
 //   - 4008 / 4028：请求频次或配额超限（Trae SOLO "Your requests have exceeded
 //     the quota."），间歇性，换账号或稍后重试即可恢复 → ErrSoftRate（短冷却 + 换号）
 //   - 1005：权益 / 订阅不足，账号级不可自愈 → ErrHardCredit（长冷却）
-//   - 1001 / 4001：模型名或能力不匹配，换号也无济于事 → ErrClient（错误计数）
+//   - 1001 / 4001：模型名或能力不匹配，换号也无济于事 → ErrRequest（不换号、不冷却）
+//   - 4026：上下文长度超限，属请求本身问题，换号必然复现 → ErrRequest
 var businessCodeKinds = map[int64]ErrKind{
-	1001: ErrClient,
+	1001: ErrRequest,
 	1005: ErrHardCredit,
-	4001: ErrClient,
+	4001: ErrRequest,
 	4008: ErrSoftRate,
+	4026: ErrRequest,
 	4028: ErrSoftRate,
 	9074: ErrSoftRate,
+}
+
+// requestMarkers 请求级错误文案兜底：码表未覆盖的新码，只要文案表明是「请求本身
+// 有问题」（上下文超限、参数非法等），一律按 ErrRequest 处理——这类错误换号必然
+// 复现，重试只会把池内账号逐个记错而拖垮整个渠道。
+//
+// 匹配串必须足够具体：只用 "上下文"、"超长"、"exceeded the maximum" 这类宽泛词
+// 会把「上下文已失效」「配额超限」等账号级/间歇性错误一并误判成请求级，反而让
+// 本可换号自愈的限流被直接抛给客户端。
+var requestMarkers = []string{
+	"context length", "context_length", "maximum context length", "context window",
+	"prompt is too long", "input is too long", "too many tokens", "token limit",
+	"invalid param", "param is invalid", "invalid model", "invalid request param",
+	"上下文长度", "上下文超长", "上下文过长", "超出上下文", "输入超长", "输入过长",
+	"参数错误", "参数非法", "请求参数",
 }
 
 // softRateMarkers 文案兜底：码表未覆盖的新码，只要文案表明是频控/配额超限，
 // 一律按软限流处理（短冷却 + 换号），避免把可恢复的间歇限流误判成账号故障。
 var softRateMarkers = []string{
 	"too frequent", "too many requests", "rate limit", "ratelimit",
-	"exceeded the quota", "quota limit", "operation too frequent",
+	"exceeded the quota", "maximum quota", "quota limit", "operation too frequent",
 	"频繁", "限流", "稍后再试", "请稍后",
 }
 
@@ -43,6 +60,14 @@ func ClassifyBusinessCode(code int64, msg string) ErrKind {
 		return kind
 	}
 	lower := strings.ToLower(msg)
+	// 请求级判定先于软限流：上下文超限类文案（如 "context length ... exceeded"
+	// 同时含 "exceeded"）若被软限流先命中，会把「必然复现」的请求错误误判成
+	// 「换号可自愈」的间歇限流，导致池内账号被逐个冷却。
+	for _, marker := range requestMarkers {
+		if strings.Contains(lower, marker) || strings.Contains(msg, marker) {
+			return ErrRequest
+		}
+	}
 	for _, marker := range softRateMarkers {
 		if strings.Contains(lower, marker) || strings.Contains(msg, marker) {
 			return ErrSoftRate
