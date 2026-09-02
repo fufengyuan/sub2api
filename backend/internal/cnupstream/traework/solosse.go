@@ -361,6 +361,13 @@ func streamOpts(w http.ResponseWriter, r io.Reader, onErr func(*SOLOStreamError)
 	var pendingUsage map[string]any
 	sawDone := false
 	sawOutput := false
+	// wroteAnyChunk 表示"已经向客户端写出过 chunk"，与 sawOutput 语义不同：
+	// sawOutput 表示"上游产出过内容"，被 case "error" 用于决定是否返回
+	// StreamBeforeOutputError 让上层换号重试（不可挪作他用）；wroteAnyChunk 只用于
+	// 判断本 chunk 是否为流的第一个 chunk —— 首 chunk 必须带 delta.role="assistant"。
+	// 若上游第一个事件就是 done（无任何 output），末 chunk 同时也承担首 chunk 角色，
+	// 此时也必须带 role，否则客户端从未收到 role，仍不符合 OpenAI 规范。
+	wroteAnyChunk := false
 	st := &sseState{}
 	writeChunk := func(delta map[string]any, finish string) error {
 		chunk := map[string]any{
@@ -370,14 +377,28 @@ func streamOpts(w http.ResponseWriter, r io.Reader, onErr func(*SOLOStreamError)
 			"model":   "",
 			"choices": []any{
 				map[string]any{
-					"index": 0,
-					"delta": delta,
+					"index":         0,
+					"delta":         delta,
+					"finish_reason": nil,
 				},
 			},
 		}
 		choice := chunk["choices"].([]any)[0].(map[string]any)
 		if finish != "" {
 			choice["finish_reason"] = finish
+		}
+		// finish_reason 恒定存在：末 chunk 为具体原因，中间 chunk 为 null。
+		// 缺字段会被部分客户端（如 zcode）按"未结束"处理后，再用 chunk 到达时延/字段
+		// 切换去切分 reasoning_content，造成"一段一段思考"的视觉异常；显式 null 明确
+		// 告诉客户端"消息未结束，继续累积"，与 OpenAI DeepSeek-reasoner 标准流一致。
+
+		// 首 chunk 必须携带 delta.role="assistant"：客户端据此识别"推理/正文消息起点"
+		// 并打开始一轮 message；缺 role 会被部分客户端按字段空 delta 渲染为
+		// "思考持续了几秒"独立块（zcode 等）。
+		if !wroteAnyChunk {
+			if _, hasRole := delta["role"]; !hasRole {
+				delta["role"] = "assistant"
+			}
 		}
 		if pendingUsage != nil {
 			chunk["usage"] = pendingUsage
@@ -390,6 +411,7 @@ func streamOpts(w http.ResponseWriter, r io.Reader, onErr func(*SOLOStreamError)
 		if fl != nil {
 			fl.Flush()
 		}
+		wroteAnyChunk = true
 		return nil
 	}
 	writeDONE := func() error {
@@ -444,6 +466,8 @@ func streamOpts(w http.ResponseWriter, r io.Reader, onErr func(*SOLOStreamError)
 			case "token_usage":
 				pendingUsage = ev.Usage
 			case "done":
+				// role 注入由 writeChunk 按 wroteAnyChunk 自行判断：若上游未产出任何
+				// output 就到达 done，末 chunk 同时承担首 chunk 角色，也要带 role。
 				if err := writeChunk(map[string]any{}, ev.FinishReason); err != nil {
 					return err
 				}
