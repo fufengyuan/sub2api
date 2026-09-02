@@ -4,8 +4,9 @@
       <!-- Backdrop: click anywhere outside to close -->
       <div class="fixed inset-0 z-[9998]" @click="emit('close')"></div>
       <div
-        class="action-menu-content fixed z-[9999] w-52 overflow-hidden rounded-xl bg-white shadow-lg ring-1 ring-black/5 dark:bg-dark-800"
-        :style="{ top: position.top + 'px', left: position.left + 'px' }"
+        ref="menuRef"
+        class="action-menu-content fixed z-[9999] max-h-[calc(100vh-16px)] w-52 overflow-y-auto overscroll-contain rounded-xl bg-white shadow-lg ring-1 ring-black/5 dark:bg-dark-800"
+        :style="{ top: adjustedPosition.top + 'px', left: adjustedPosition.left + 'px' }"
         @click.stop
       >
         <div class="py-1">
@@ -79,7 +80,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, watch, onUnmounted } from 'vue'
+import { computed, nextTick, ref, watch, onUnmounted } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { Icon } from '@/components/icons'
 import type { Account } from '@/types'
@@ -87,6 +88,41 @@ import type { Account } from '@/types'
 const props = defineProps<{ show: boolean; account: Account | null; position: { top: number; left: number } | null }>()
 const emit = defineEmits(['close', 'test', 'stats', 'schedule', 'duplicate', 'reauth', 'refresh-token', 'recover-state', 'reset-quota', 'set-privacy', 'create-spark-shadow', 'refresh-credits', 'credits-detail', 'checkin'])
 const { t } = useI18n()
+
+const EDGE_PADDING = 8
+const menuRef = ref<HTMLElement | null>(null)
+const adjustedPosition = ref<{ top: number; left: number }>({ top: 0, left: 0 })
+
+// 调用方估算的菜单高度是固定值，而菜单项数量随账号类型变化（OAuth/国产渠道/
+// 影子账号等），估算偏小时末行打开的菜单底部会溢出视口被截断。这里在打开后
+// 用实测高度修正位置：底部放不下就上移，仍放不下则贴顶（配合 max-h 滚动）。
+const repositionWithinViewport = async () => {
+  const pos = props.position
+  if (!pos) return
+  adjustedPosition.value = { top: pos.top, left: pos.left }
+  await nextTick()
+  const el = menuRef.value
+  if (!el) return
+  const { innerWidth, innerHeight } = window
+  const { width, height } = el.getBoundingClientRect()
+  let { top, left } = pos
+  if (top + height > innerHeight - EDGE_PADDING) {
+    top = Math.max(EDGE_PADDING, innerHeight - height - EDGE_PADDING)
+  }
+  if (left + width > innerWidth - EDGE_PADDING) {
+    left = Math.max(EDGE_PADDING, innerWidth - width - EDGE_PADDING)
+  }
+  adjustedPosition.value = { top, left }
+}
+
+watch(
+  () => [props.show, props.position] as const,
+  ([show]) => {
+    if (show) void repositionWithinViewport()
+  },
+  { immediate: true }
+)
+
 const canDuplicate = computed(() => {
   if (!props.account || props.account.parent_account_id != null) return false
   return ['apikey', 'upstream', 'bedrock', 'service_account'].includes(props.account.type)
