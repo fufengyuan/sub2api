@@ -76,6 +76,19 @@ func (h *GatewayHandler) ChatCompletions(c *gin.Context) {
 		return
 	}
 	reqModel := modelResult.String()
+
+	// 空/缺失 messages 属于客户端参数错误（OpenAI 规范 400 invalid_request_error）。
+	// 前置校验避免它被当作上游故障路由到账号选择层，误报成 429/502。
+	messagesResult := gjson.GetBytes(body, "messages")
+	if !messagesResult.Exists() || !messagesResult.IsArray() {
+		h.chatCompletionsErrorResponse(c, http.StatusBadRequest, "invalid_request_error", "messages is required and must be an array")
+		return
+	}
+	if len(messagesResult.Array()) == 0 {
+		h.chatCompletionsErrorResponse(c, http.StatusBadRequest, "invalid_request_error", "messages must not be empty")
+		return
+	}
+
 	bindRequestedReasoningEffort(c, body, reqModel)
 	ensureCompositeTargetPlatform(c, apiKey, reqModel)
 	reqStream, ok := parseOpenAICompatibleStream(body)

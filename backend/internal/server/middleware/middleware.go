@@ -93,6 +93,40 @@ func abortWithOpenAIQuotaError(c *gin.Context, statusCode int, message string) {
 	c.Abort()
 }
 
+// openAIErrTypeForStatus maps an HTTP status to the OpenAI error.type semantic.
+func openAIErrTypeForStatus(status int) string {
+	switch status {
+	case http.StatusUnauthorized:
+		return "authentication_error"
+	case http.StatusForbidden:
+		return "permission_error"
+	case http.StatusTooManyRequests:
+		return "rate_limit_error"
+	case http.StatusBadRequest:
+		return "invalid_request_error"
+	case http.StatusNotFound:
+		return "not_found_error"
+	default:
+		return "server_error"
+	}
+}
+
+// abortWithCompatibleError writes a unified OpenAI-compatible error envelope
+// {"error":{"message","type","param","code"}} for the compatible gateway auth
+// middleware, keeping code+message inside so legacy consumers and the
+// ingress-rejection markers still see the same identifiers.
+func abortWithCompatibleError(c *gin.Context, statusCode int, code, message string) {
+	c.JSON(statusCode, gin.H{
+		"error": gin.H{
+			"message": message,
+			"type":    openAIErrTypeForStatus(statusCode),
+			"param":   nil,
+			"code":    code,
+		},
+	})
+	c.Abort()
+}
+
 // ──────────────────────────────────────────────────────────
 // RequireGroupAssignment — 未分组 Key 拦截中间件
 // ──────────────────────────────────────────────────────────
