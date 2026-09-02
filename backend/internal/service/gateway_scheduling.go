@@ -715,6 +715,12 @@ func (s *GatewayService) SelectAccountWithLoadAwareness(ctx context.Context, gro
 	}
 
 	if len(candidates) == 0 {
+		slog.Warn("composite_pool_no_candidate",
+			"group_id", derefGroupID(groupID),
+			"platform", platform,
+			"requested_model", requestedModel,
+			"accounts", len(accounts),
+			"excluded", len(excludedIDs))
 		return nil, ErrNoAvailableAccounts
 	}
 

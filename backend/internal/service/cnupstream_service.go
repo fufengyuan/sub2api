@@ -23,6 +23,7 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/cnupstream/upstream"
 	"github.com/Wei-Shaw/sub2api/internal/config"
 	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
+	"github.com/tidwall/gjson"
 )
 
 // cnAccountRepo 是 CnUpstreamService 对账号仓储的最小依赖切片：只消费账号列表，
@@ -221,6 +222,8 @@ func (s *CnUpstreamService) ChatStream(platform string, accountID int64, body []
 	for len(tried) < count {
 		a := rt.pool.PickForAccount(accountID, tried)
 		if a == nil {
+			log.Printf("cnupstream chat_stream no schedulable account platform=%s tried=%d/%d",
+				platform, len(tried), count)
 			break
 		}
 		rc, status, respBody, err := rt.upstream.ChatStream(a, body)
@@ -228,12 +231,20 @@ func (s *CnUpstreamService) ChatStream(platform string, accountID int64, body []
 			// 传输层失败：短冷却并尝试下一账号
 			tried[a.UID] = true
 			rt.pool.Cooldown(a.UID, pool.CoolErr, 30*time.Second, err.Error())
+			log.Printf("cnupstream chat_stream transport error platform=%s uid=%s model=%s err=%s",
+				platform, a.UID, gjson.GetBytes(body, "model").String(), err.Error())
 			continue
 		}
 		if status >= 400 {
 			kind := rt.upstream.Classify(status, string(respBody))
 			tried[a.UID] = true
 			applyCnCooldown(rt.pool, a.UID, kind)
+			bodySnippet := strings.TrimSpace(string(respBody))
+			if len(bodySnippet) > 200 {
+				bodySnippet = bodySnippet[:200]
+			}
+			log.Printf("cnupstream chat_stream upstream http error platform=%s uid=%s status=%d kind=%s body=%s",
+				platform, a.UID, status, kind, bodySnippet)
 			continue
 		}
 		rt.pool.NoteSuccess(a.UID)
@@ -249,6 +260,8 @@ func (s *CnUpstreamService) ChatStream(platform string, accountID int64, body []
 		}, nil
 	}
 	retryAfter, _ := rt.pool.EarliestRecovery()
+	log.Printf("cnupstream chat_stream pool exhausted platform=%s tried=%d/%d retry_after=%s",
+		platform, len(tried), count, retryAfter)
 	return nil, &CnPoolExhaustedError{Platform: platform, RetryAfter: retryAfter, Accounts: count}
 }
 
@@ -274,14 +287,19 @@ func applyCnCooldown(p *pool.Pool, uid string, kind provider.ErrKind) {
 	switch kind {
 	case provider.ErrSessionDead:
 		p.Disable(uid, "session dead")
+		log.Printf("cnupstream cooldown uid=%s kind=session_dead action=disable", uid)
 	case provider.ErrHardCredit:
 		p.Cooldown(uid, pool.CoolHard, 30*time.Minute, "credit exhausted")
+		log.Printf("cnupstream cooldown uid=%s kind=hard_credit action=cooldown 30m", uid)
 	case provider.ErrSoftRate:
 		p.Cooldown(uid, pool.CoolSoft, 60*time.Second, "rate limited")
+		log.Printf("cnupstream cooldown uid=%s kind=soft_rate action=cooldown 60s", uid)
 	case provider.ErrServer:
 		p.Cooldown(uid, pool.CoolErr, 2*time.Minute, "server error")
+		log.Printf("cnupstream cooldown uid=%s kind=server action=cooldown 2m", uid)
 	default:
 		p.NoteError(uid, 3, 5*time.Minute)
+		log.Printf("cnupstream cooldown uid=%s kind=default action=note_error 3x5m", uid)
 	}
 }
 

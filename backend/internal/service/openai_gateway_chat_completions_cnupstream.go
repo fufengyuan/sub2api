@@ -20,6 +20,8 @@ import (
 
 	"github.com/Wei-Shaw/sub2api/internal/cnupstream/provider"
 	"github.com/Wei-Shaw/sub2api/internal/cnupstream/traework"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
+	"go.uber.org/zap"
 )
 
 // cnUpstreamPlatforms 三渠道平台标识。命中时网关 Chat Completions 直调
@@ -129,6 +131,14 @@ func cnUpstreamFailoverError(account *Account, err error) *UpstreamFailoverError
 		headers = http.Header{"Retry-After": []string{strconv.Itoa(int(math.Ceil(cnSoftRateSwitchBackoff.Seconds())))}}
 	}
 
+	logger.L().Info("cn chat_completions: upstream failover classification",
+		zap.String("platform", cnAccountPlatform(account)),
+		zap.Int("status", status),
+		zap.String("scope", string(scope)),
+		zap.Duration("backoff", backoff),
+		zap.Error(err),
+	)
+
 	return &UpstreamFailoverError{
 		StatusCode:            status,
 		Stage:                 GatewayFailureStageInference,
@@ -203,6 +213,14 @@ func (s *OpenAIGatewayService) forwardCnUpstreamSinglePlatform(
 		return nil, fmt.Errorf("cnupstream: service not wired")
 	}
 	platform := account.Platform
+	lg := logger.FromContext(c.Request.Context())
+	lg.Debug("cn chat_completions: forward start",
+		zap.String("platform", platform),
+		zap.Int64("account_id", account.ID),
+		zap.String("model", originalModel),
+		zap.String("billing_model", billingModel),
+		zap.Bool("stream", reqStream),
+	)
 
 	// 启动下游保活，覆盖「上游 ChatStream 尚未返回」的建连/首包等待期。
 	//
@@ -256,6 +274,13 @@ func (s *OpenAIGatewayService) forwardCnUpstreamSinglePlatform(
 		} else if len(msg) > 512 {
 			msg = msg[:512]
 		}
+		lg.Warn("cn chat_completions: upstream http error",
+			zap.String("platform", platform),
+			zap.Int64("account_id", account.ID),
+			zap.String("model", billingModel),
+			zap.Int("upstream_status", status),
+			zap.String("body", msg),
+		)
 		return nil, fmt.Errorf("cnupstream: %s upstream error (http %d): %s", platform, status, msg)
 	}
 
@@ -287,12 +312,30 @@ func (s *OpenAIGatewayService) forwardCnUpstreamSinglePlatform(
 		// 两种情况都要回灌冷却，否则同一个被限流的账号会被反复选中。
 		var businessErr error
 		streamErr := s.cnStream(upstream, cw, rc, func(se *traework.SOLOStreamError) {
+			if se == nil {
+				return
+			}
 			if businessErr == nil {
 				businessErr = se
 			}
+			lg.Warn("cn chat_completions: stream business error",
+				zap.String("platform", platform),
+				zap.Int64("account_id", account.ID),
+				zap.String("model", billingModel),
+				zap.Int("kind", int(se.Kind())),
+				zap.Int64("code", se.Code),
+				zap.String("err", se.Error()),
+			)
 		})
 		if streamErr != nil {
 			target.Report(streamErr)
+			lg.Warn("cn chat_completions: stream error",
+				zap.String("platform", platform),
+				zap.Int64("account_id", account.ID),
+				zap.String("model", billingModel),
+				zap.Int("bytes_written", cw.written),
+				zap.Error(streamErr),
+			)
 			// 流已部分写出（至少状态头/首个 chunk）时照常计费，避免半途 SSE 丢计费；
 			// 未写出任何响应时交由 handler 排除本账号重选。
 			if cw.written > 0 {
@@ -301,6 +344,17 @@ func (s *OpenAIGatewayService) forwardCnUpstreamSinglePlatform(
 			return nil, streamErr
 		}
 		target.Report(businessErr)
+		lg.Info("cn chat_completions: stream done",
+			zap.String("platform", platform),
+			zap.Int64("account_id", account.ID),
+			zap.String("model", billingModel),
+			zap.Int("input_tokens", usage.InputTokens),
+			zap.Int("output_tokens", usage.OutputTokens),
+			zap.Int("cache_read_tokens", usage.CacheReadInputTokens),
+			zap.Int("cache_creation_tokens", usage.CacheCreationInputTokens),
+			zap.Int64("duration_ms", time.Since(startTime).Milliseconds()),
+			zap.Int("first_token_ms", firstTokenMs),
+		)
 		return buildResult(), nil
 	}
 
@@ -319,6 +373,13 @@ func (s *OpenAIGatewayService) forwardCnUpstreamSinglePlatform(
 	agg, err := upstream.Aggregate(rc)
 	if err != nil {
 		target.Report(err)
+		lg.Warn("cn chat_completions: aggregate error",
+			zap.String("platform", platform),
+			zap.Int64("account_id", account.ID),
+			zap.String("model", billingModel),
+			zap.Bool("response_committed", isCnResponseCommitted(c)),
+			zap.Error(err),
+		)
 		if !isCnResponseCommitted(c) {
 			return nil, err
 		}
@@ -331,6 +392,16 @@ func (s *OpenAIGatewayService) forwardCnUpstreamSinglePlatform(
 	}
 	stopPadding()
 	c.Data(http.StatusOK, "application/json", respJSON)
+	lg.Info("cn chat_completions: non-stream done",
+		zap.String("platform", platform),
+		zap.Int64("account_id", account.ID),
+		zap.String("model", billingModel),
+		zap.Int("input_tokens", usage.InputTokens),
+		zap.Int("output_tokens", usage.OutputTokens),
+		zap.Int("cache_read_tokens", usage.CacheReadInputTokens),
+		zap.Int("cache_creation_tokens", usage.CacheCreationInputTokens),
+		zap.Int64("duration_ms", time.Since(startTime).Milliseconds()),
+	)
 	return buildResult(), nil
 }
 
