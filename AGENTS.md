@@ -33,6 +33,8 @@ AI API 网关平台，用于订阅配额分发。Go 后端 + Vue 3 前端，Post
 
 > **打包注意**：`build-linux`（脚本 `backend/scripts/build-linux-amd64.sh`）**必须带 `-tags embed`**。前端页面经 `backend/internal/web/embed_on.go`（`//go:build embed`）的 `//go:embed dist` 在编译期打进二进制；漏掉该 tag 则 `frontendFS` 为空、页面 404。构建前先跑 `make build-frontend`（`pnpm --dir frontend run build`）产出最新 `internal/web/dist`。产物固定输出 `backend/dist/server-linux-amd64`。
 
+> **⚠️ Agent 终端环境 PATH 不完整**：TRAE IDE 启动的终端会话 PATH 不含 `/usr/local/go/bin`、`/usr/bin` 之外的常用路径，直接敲 `go` / `git` / `head` / `tail` / `grep` 会报 `command not found`（**不是没装**）。已确认可用全路径：`/usr/local/go/bin/go`（go1.27.0）、`/usr/bin/git`（2.50.1）。在 agent 终端里执行构建/测试一律用全路径，或先 `export PATH=$PATH:/usr/local/go/bin:/usr/bin`。
+
 ## Architecture
 
 ```
@@ -82,6 +84,7 @@ frontend/
 - **三渠道一键授权**: traework 走浏览器回调流（授权页 `www.trae.cn/authorization`，回调 `/oauth/callback/:platform/:state` 携带 refreshToken+host）；workbuddy 走服务端轮询流（`StartLogin`/`PollLogin`，无浏览器回调）；qoder 无授权流程仅粘贴 auth JSON。凭证键名必须用驼峰（与 `hydrateAuth` 一致）。详见 [docs/oauth-account-add-design.md](docs/oauth-account-add-design.md)。
 - **三渠道积分/签到/模型映射**: 管理端账号级 API `POST /:id/credits/refresh`、`GET /:id/credits/detail`、`POST /:id/checkin`、`GET /:id/upstream-models`（`CnUpstreamHandler`，签到业务失败返回 success=false 而非 error）；余额落 credentials `creditsRemain`；账号级模型映射存 credentials `model_mapping`（转发经 `GetMappedModel` 生效）；自动签到由 config.yaml `checkin.enabled` 开启（调度器随 Wire Provider 自启）。**自动签到闭环已实现**：scheduler 钩子（`PersistAuth` 凭证回写 / `Reload` 批量前刷池 / `CheckinBackoff` 退避）+ 签到结果统一经 `PersistCheckinResult` 落库（`creditsRemain`/`lastCheckinAt`/`lastCheckinResult`），前端积分列展示上次签到状态；token 刷新回写必须 **COW 合并** credentials（仓储 Update 整行覆盖，整包替换会抹掉 `model_mapping` 等业务键）。详见 [docs/cnupstream-credits-checkin-design.md](docs/cnupstream-credits-checkin-design.md)。
 - **推理字段透出（reasoning_content / thinking tokens）**: 网关**所有链路响应侧原样透传，不剥 reasoning_content、不清 usage thinking 字段**——客户端收到 reasoning_content 恒空或 thinking tokens=0，根因在上游（上游没返回思考内容或字段名非 `reasoning_content`），不是网关剥字段。请求侧：qwenwork/qoder 的 `buildAgentBody` 重构精简 body 时会**丢弃客户端 `reasoning_effort` 强度值**（已修复为写入 `model_config.reasoning_effort`，2026-09-02，提交 `dfc0fff63`）且**不把 `thinking` 字段本身传给上游**（只转 `model_config.is_reasoning` 布尔）；traework/workbuddy 为浅改写透传，thinking/reasoning_effort 原样转发。详见 [docs/cn-upstream-reasoning-content-transparency.md](docs/cn-upstream-reasoning-content-transparency.md)。
+- **CN 渠道流式 SSE 必须符合 OpenAI chunk 规范**（否则 zcode 等客户端把 reasoning_content 切成"一段一段思考"）：① `finish_reason` 字段**恒定存在**——末 chunk 为具体原因（`stop`/`length`/…），中间 chunk 为 `null`，**绝不能缺字段或给空串**（缺字段时客户端退化为按 chunk 到达时延/字段切换切分 UI 块）；② **首 chunk 必须带 `delta.role="assistant"`**，且 role 只出现一次（末 chunk/intermediate 不带）。traework 由 `streamOpts.writeChunk`（`cnupstream/traework/solosse.go`）用独立状态 `wroteAnyChunk` 判断首 chunk——**不可复用 `sawOutput`**（后者语义是"上游产出过内容"，被 `case "error"` 用于决定是否返回 `StreamBeforeOutputError` 让上层换号重试）；上游无 output 直接 done 时末 chunk 同时是首 chunk，仍须带 role。qoder/qwenwork 经 `normalizeStreamFinishReason` 把空串转 nil，但首 chunk role 仍依赖上游透传，若同类反馈需同样兜底。详见 [.claude/artifacts/fixes/cn-traework-stream-openai-spec.md](.claude/artifacts/fixes/cn-traework-stream-openai-spec.md)。
 
 ## Notes
 
