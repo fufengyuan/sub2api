@@ -132,6 +132,55 @@ func TestClassifyNoAccountError_ModelNotSupported_Returns404(t *testing.T) {
 	require.Equal(t, service.OpsClientBusinessLimitedReasonLocalModelConfiguration, service.OpsClientBusinessLimitedReason(c))
 }
 
+func TestComposeNoAccountSelectionMessage_NoDuplicatePrefix(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+		want string
+	}{
+		{
+			name: "nil error yields empty message",
+			err:  nil,
+			want: "",
+		},
+		{
+			name: "detail already starts with standard prefix is reused verbatim",
+			err:  fmt.Errorf("no available accounts"),
+			want: "no available accounts",
+		},
+		{
+			name: "detail already starts with model-specific prefix is reused verbatim",
+			err:  fmt.Errorf("no available accounts supporting model: gpt-5.6-sol"),
+			want: "no available accounts supporting model: gpt-5.6-sol",
+		},
+		{
+			name: "unrelated detail gets the prefix once",
+			err:  fmt.Errorf("upstream refused connection"),
+			want: "No available accounts: upstream refused connection",
+		},
+		{
+			name: "no healthy prefix is also preserved",
+			err:  fmt.Errorf("no healthy account"),
+			want: "no healthy account",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			require.Equal(t, tt.want, composeNoAccountSelectionMessage(tt.err))
+		})
+	}
+}
+
+func TestComposeNoAccountSelectionMessage_CI(t *testing.T) {
+	// "No available accounts no available accounts" double-colon bug must never
+	// resurface for the common case where the selection error already carries
+	// the standard prefix.
+	msg := composeNoAccountSelectionMessage(fmt.Errorf("NO AVAILABLE ACCOUNTS supporting model: made-up-model"))
+	require.Equal(t, "NO AVAILABLE ACCOUNTS supporting model: made-up-model", msg)
+	require.NotContains(t, msg, "No available accounts: no available accounts")
+}
+
 func TestClassifyOpenAICompatibleNoAccountError_GrokUsesGrokPlatform(t *testing.T) {
 	c := newTestGinContextWithRequest()
 	fd := &fakeDiagnoser{resp: service.ModelAvailabilityDiagnosis{HasAccountsInPool: true, HasModelSupport: false}}

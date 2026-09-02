@@ -180,7 +180,7 @@ func (h *GatewayHandler) Responses(c *gin.Context) {
 				}
 				message := cls.Message
 				if !cls.ModelNotFound {
-					message = "No available accounts: " + err.Error()
+					message = composeNoAccountSelectionMessage(err)
 				}
 				h.responsesErrorResponse(c, cls.Status, cls.ErrType, message)
 				return
@@ -382,6 +382,7 @@ func (h *GatewayHandler) handleResponsesFailoverExhausted(c *gin.Context, lastEr
 		service.SetOpsUpstreamError(c, statusCode, service.OpenAISilentRefusalClientMessage(), "")
 		status, code, message = http.StatusBadGateway, "upstream_error", service.OpenAISilentRefusalClientMessage()
 	} else if lastErr != nil && statusCode == http.StatusTooManyRequests {
+		ensureRateLimitRetryAfter(c, lastErr.ResponseHeaders)
 		status, code, message = http.StatusTooManyRequests, "rate_limit_error", "All available accounts are currently rate-limited. Please retry later."
 	}
 	if streamStarted {

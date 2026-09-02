@@ -159,6 +159,38 @@ func classifyOpenAICompatibleNoAccountErrorFromGin(
 	)
 }
 
+// composeNoAccountSelectionMessage builds a single-meaning, non-duplicated
+// user-facing message for a "no available accounts" selection failure.
+//
+// Many selection errors already begin with the standard prefix (e.g. the
+// scheduler returns "no available accounts supporting model: foo"). Prefixing
+// them again produced "No available accounts: no available accounts ...";
+// this helper reuses the detail verbatim when it already carries the prefix.
+func composeNoAccountSelectionMessage(err error) string {
+	if err == nil {
+		return ""
+	}
+	detail := strings.TrimSpace(err.Error())
+	if strings.HasPrefix(strings.ToLower(detail), "no available ") ||
+		strings.HasPrefix(strings.ToLower(detail), "no healthy ") {
+		return detail
+	}
+	return "No available accounts: " + detail
+}
+
+// ensureRateLimitRetryAfter guarantees a 429 response carries a Retry-After
+// header (OpenAI spec). It reuses an upstream-provided value when present,
+// otherwise falls back to a 30s default so clients can back off gracefully.
+func ensureRateLimitRetryAfter(c *gin.Context, upstreamHeaders http.Header) {
+	copyFailoverRetryAfter(c, upstreamHeaders)
+	if c == nil || c.Writer == nil {
+		return
+	}
+	if c.Writer.Header().Get("Retry-After") == "" {
+		c.Header("Retry-After", "30")
+	}
+}
+
 func openAICompatibleSelectionErrorForLog(err error, platform string) error {
 	if err == nil || platform != service.PlatformGrok {
 		return err
