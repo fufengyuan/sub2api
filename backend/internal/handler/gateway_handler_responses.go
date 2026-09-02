@@ -180,7 +180,7 @@ func (h *GatewayHandler) Responses(c *gin.Context) {
 				}
 				message := cls.Message
 				if !cls.ModelNotFound {
-					message = composeNoAccountSelectionMessage(err)
+					message = noAccountSelectionClientMessage(cls, err)
 				}
 				h.responsesErrorResponse(c, cls.Status, cls.ErrType, message)
 				return
@@ -351,11 +351,15 @@ func (h *GatewayHandler) Responses(c *gin.Context) {
 }
 
 // responsesErrorResponse writes an error in OpenAI Responses API format.
+// Responses API error 对象标准字段为 code/message/param/type；param 无具体值时为
+// null。code 承载错误类别(调用方传入)，type 镜像同一语义，保证下游按标准结构解析。
 func (h *GatewayHandler) responsesErrorResponse(c *gin.Context, status int, code, message string) {
 	c.JSON(status, gin.H{
 		"error": gin.H{
 			"code":    code,
 			"message": message,
+			"param":   nil,
+			"type":    code,
 		},
 	})
 }

@@ -190,7 +190,7 @@ func (h *GatewayHandler) ChatCompletions(c *gin.Context) {
 				}
 				message := cls.Message
 				if !cls.ModelNotFound {
-					message = composeNoAccountSelectionMessage(err)
+					message = noAccountSelectionClientMessage(cls, err)
 				}
 				h.chatCompletionsErrorResponse(c, cls.Status, cls.ErrType, message)
 				return
@@ -403,11 +403,15 @@ func (h *GatewayHandler) ChatCompletions(c *gin.Context) {
 }
 
 // chatCompletionsErrorResponse writes an error in OpenAI Chat Completions format.
+// OpenAI error 对象标准字段为 message/type/param/code；param/code 无具体值时为
+// null（符合官方对无参、无机器码错误的表示），保证下游按标准结构解析。
 func (h *GatewayHandler) chatCompletionsErrorResponse(c *gin.Context, status int, errType, message string) {
 	c.JSON(status, gin.H{
 		"error": gin.H{
 			"type":    errType,
 			"message": message,
+			"param":   nil,
+			"code":    nil,
 		},
 	})
 }

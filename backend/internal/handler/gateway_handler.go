@@ -327,7 +327,7 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 					)
 					message := cls.Message
 					if !cls.ModelNotFound {
-						message = composeNoAccountSelectionMessage(err)
+						message = noAccountSelectionClientMessage(cls, err)
 					}
 					h.handleStreamingAwareError(c, cls.Status, cls.ErrType, message, streamStarted)
 					return
@@ -641,7 +641,7 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 					)
 					message := cls.Message
 					if !cls.ModelNotFound {
-						message = composeNoAccountSelectionMessage(err)
+						message = noAccountSelectionClientMessage(cls, err)
 					}
 					h.handleStreamingAwareError(c, cls.Status, cls.ErrType, message, streamStarted)
 					return

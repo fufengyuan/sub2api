@@ -89,19 +89,19 @@ func classifyNoAccountError(
 	displayModel string,
 	platform string,
 ) noAccountErrorClassification {
-	fallback := noAccountErrorClassification{
-		Status:  http.StatusServiceUnavailable,
-		ErrType: "api_error",
-		Message: "Service temporarily unavailable",
-	}
-
 	routingModel = strings.TrimSpace(routingModel)
 	displayModel = strings.TrimSpace(displayModel)
 	if displayModel == "" {
 		displayModel = routingModel
 	}
 	if diag == nil || apiKey == nil || apiKey.GroupID == nil || routingModel == "" {
-		return fallback
+		// 缺少诊断上下文时，仍尽量给用户可操作的提示（含模型名），
+		// 而不是干巴巴的 "Service temporarily unavailable"。
+		return noAccountErrorClassification{
+			Status:  http.StatusServiceUnavailable,
+			ErrType: "api_error",
+			Message: composeModelUnavailableMessage(displayModel),
+		}
 	}
 
 	result := diag.DiagnoseModelAvailabilityForPlatform(ctx, apiKey.GroupID, routingModel, platform)
@@ -109,11 +109,27 @@ func classifyNoAccountError(
 		return noAccountErrorClassification{
 			Status:        http.StatusNotFound,
 			ErrType:       "model_not_found",
-			Message:       fmt.Sprintf("Model %q is not supported by any configured account in this group", displayModel),
+			Message:       fmt.Sprintf("Model %q is not supported by any configured account in this group. Please switch to a supported model.", displayModel),
 			ModelNotFound: true,
 		}
 	}
-	return fallback
+	return noAccountErrorClassification{
+		Status:  http.StatusServiceUnavailable,
+		ErrType: "api_error",
+		Message: composeModelUnavailableMessage(displayModel),
+	}
+}
+
+// composeModelUnavailableMessage 构造"模型当前不可用/请更换模型"的友好提示。
+// 该模型在分组内有账号配置(池里有映射)但当前账号全被限流/冷却/不可调度
+// (如 glm-5.3-flash 仅 workbuddy 支持、workbuddy 全限流)时，返回 503 并提示
+// 用户稍后重试或更换模型，而不是只给生硬的 HTTP 错误。
+func composeModelUnavailableMessage(model string) string {
+	model = strings.TrimSpace(model)
+	if model == "" {
+		return "No available accounts are currently usable. Please retry later or switch to another model."
+	}
+	return fmt.Sprintf("Model %q has no currently available accounts (upstream channels are rate-limited or temporarily unavailable). Please retry later or switch to another model.", model)
 }
 
 // classifyNoAccountErrorFromGin is a thin wrapper that forwards the gin
@@ -176,6 +192,28 @@ func composeNoAccountSelectionMessage(err error) string {
 		return detail
 	}
 	return "No available accounts: " + detail
+}
+
+// noAccountSelectionClientMessage 计算选号失败最终返回给客户端的 message。
+// 优先给出含模型名与"更换模型"指引的友好消息(cls.Message)；对 429 软限流保留
+// classifier 的"稍后重试"提示；对 503 若 scheduler 携带了有价值的诊断 detail
+// (如 "supporting model: x (...)"，区别于裸 "no available accounts")则附带其上，
+// 便于用户/运维定位，同时不丢失换模型指引。
+func noAccountSelectionClientMessage(cls noAccountErrorClassification, err error) string {
+	if cls.ModelNotFound {
+		return cls.Message
+	}
+	if cls.Status == http.StatusTooManyRequests {
+		return cls.Message
+	}
+	detail := ""
+	if err != nil {
+		detail = strings.TrimSpace(err.Error())
+	}
+	if detail == "" || strings.EqualFold(detail, "no available accounts") {
+		return cls.Message
+	}
+	return cls.Message + " " + detail
 }
 
 // ensureRateLimitRetryAfter guarantees a 429 response carries a Retry-After

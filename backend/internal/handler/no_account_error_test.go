@@ -283,3 +283,83 @@ func TestClassifyNoAccountError_FromGin_NilContextStillSafe(t *testing.T) {
 	require.False(t, service.HasOpsClientBusinessLimited(nil))
 	require.Empty(t, service.OpsClientBusinessLimitedReason(nil))
 }
+
+func TestComposeModelUnavailableMessage(t *testing.T) {
+	tests := []struct {
+		name  string
+		model string
+		want  string
+	}{
+		{
+			name:  "empty model falls back to generic retry hint",
+			model: "",
+			want:  "No available accounts are currently usable. Please retry later or switch to another model.",
+		},
+		{
+			name:  "model name included with switch hint",
+			model: "glm-5.3-flash",
+			want:  `Model "glm-5.3-flash" has no currently available accounts (upstream channels are rate-limited or temporarily unavailable). Please retry later or switch to another model.`,
+		},
+		{
+			name:  "whitespace model trimmed",
+			model: "  gpt-5  ",
+			want:  `Model "gpt-5" has no currently available accounts (upstream channels are rate-limited or temporarily unavailable). Please retry later or switch to another model.`,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			require.Equal(t, tt.want, composeModelUnavailableMessage(tt.model))
+		})
+	}
+}
+
+func TestNoAccountSelectionClientMessage(t *testing.T) {
+	modelNotFound := noAccountErrorClassification{Status: http.StatusNotFound, ErrType: "model_not_found", Message: `Model "x" not supported here`, ModelNotFound: true}
+	rateLimited := noAccountErrorClassification{Status: http.StatusTooManyRequests, ErrType: "rate_limit_error", Message: "All available accounts are currently rate-limited. Please retry later."}
+	svcUnavail := noAccountErrorClassification{Status: http.StatusServiceUnavailable, ErrType: "api_error", Message: composeModelUnavailableMessage("glm-5.3-flash")}
+
+	t.Run("model_not_found uses classifier message verbatim", func(t *testing.T) {
+		require.Equal(t, modelNotFound.Message, noAccountSelectionClientMessage(modelNotFound, fmt.Errorf("whatever")))
+	})
+	t.Run("429 keeps classifier retry hint", func(t *testing.T) {
+		require.Equal(t, rateLimited.Message, noAccountSelectionClientMessage(rateLimited, fmt.Errorf("no available accounts")))
+	})
+	t.Run("503 with bare no-available uses friendly message", func(t *testing.T) {
+		got := noAccountSelectionClientMessage(svcUnavail, fmt.Errorf("no available accounts"))
+		require.Equal(t, svcUnavail.Message, got)
+		require.Contains(t, got, "glm-5.3-flash")
+		require.Contains(t, got, "switch to another model")
+	})
+	t.Run("503 with diagnostic detail appends it", func(t *testing.T) {
+		err := fmt.Errorf("no available accounts supporting model: glm-5.3-flash (total=2 eligible=0 model_rate_limited=2)")
+		got := noAccountSelectionClientMessage(svcUnavail, err)
+		require.Contains(t, got, "glm-5.3-flash")
+		require.Contains(t, got, "switch to another model")
+		require.Contains(t, got, "model_rate_limited=2")
+	})
+	t.Run("503 with nil error uses friendly message", func(t *testing.T) {
+		require.Equal(t, svcUnavail.Message, noAccountSelectionClientMessage(svcUnavail, nil))
+	})
+}
+
+func TestChatCompletionsErrorResponse_OpenAICompatibleShape(t *testing.T) {
+	// OpenAI Chat Completions error 对象标准字段为 message/type/param/code。
+	// 无具体 param/code 时应输出 null（而非缺失字段），保证下游按标准结构解析。
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	(&GatewayHandler{}).chatCompletionsErrorResponse(c, http.StatusServiceUnavailable, "api_error", "no available accounts")
+
+	require.Equal(t, http.StatusServiceUnavailable, c.Writer.Status())
+	require.JSONEq(t, `{"error":{"message":"no available accounts","type":"api_error","param":null,"code":null}}`, w.Body.String())
+}
+
+func TestResponsesErrorResponse_OpenAIShape(t *testing.T) {
+	// OpenAI Responses API error 对象标准字段为 code/message/param/type。
+	// 补全 param/type，避免字段缺失导致下游解析异常。
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	(&GatewayHandler{}).responsesErrorResponse(c, http.StatusTooManyRequests, "rate_limit_error", "rate limited")
+
+	require.Equal(t, http.StatusTooManyRequests, c.Writer.Status())
+	require.JSONEq(t, `{"error":{"code":"rate_limit_error","message":"rate limited","param":null,"type":"rate_limit_error"}}`, w.Body.String())
+}
