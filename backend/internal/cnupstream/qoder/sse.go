@@ -205,6 +205,7 @@ func streamAsOpenAI(w io.Writer, r io.Reader, model string, flush func()) error 
 	sawDone := false
 	err := parseNestedSSE(r, func(chunk map[string]any) error {
 		chunk["model"] = model
+		normalizeStreamFinishReason(chunk)
 		raw, _ := json.Marshal(chunk)
 		if _, err := fmt.Fprintf(w, "data: %s\n\n", raw); err != nil {
 			return err
@@ -226,6 +227,21 @@ func streamAsOpenAI(w io.Writer, r io.Reader, model string, flush func()) error 
 		}
 	}
 	return nil
+}
+
+// normalizeStreamFinishReason 把 choices[].finish_reason 的空串规范化为 null，
+// 避免客户端把中间 chunk 的空串误判为「流已结束」（只收 1 个分片就中断）。
+func normalizeStreamFinishReason(chunk map[string]any) {
+	choices, _ := chunk["choices"].([]any)
+	for _, ci := range choices {
+		c, _ := ci.(map[string]any)
+		if c == nil {
+			continue
+		}
+		if fr, ok := c["finish_reason"].(string); ok && fr == "" {
+			c["finish_reason"] = nil
+		}
+	}
 }
 
 // Stream 实现 provider.Upstream：嵌套 SSE → 标准 OpenAI SSE 透传。
