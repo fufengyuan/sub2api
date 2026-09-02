@@ -147,3 +147,40 @@ func TestBuildAgentBodyDeveloperToSystem(t *testing.T) {
 		t.Errorf("prompt = %q, want 你好", prompt.ChatContext.Text.Text)
 	}
 }
+
+func TestBuildAgentBodyReasoningEffortPassthrough(t *testing.T) {
+	// reasoning_effort 强度值必须写入 model_config / modelConfig，而非被丢弃；
+	// 空串时该字段应省略（不污染未启用推理的请求）。
+	msgs := []map[string]any{{"role": "user", "content": "hi"}}
+
+	raw, err := buildAgentBody(msgs, "dmodel", nil, true, "high")
+	if err != nil {
+		t.Fatalf("buildAgentBody: %v", err)
+	}
+	var withEffort struct {
+		ModelConfig map[string]any `json:"model_config"`
+	}
+	if err := json.Unmarshal(raw, &withEffort); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if got, _ := withEffort.ModelConfig["reasoning_effort"].(string); got != "high" {
+		t.Errorf("model_config.reasoning_effort = %v, want high", withEffort.ModelConfig["reasoning_effort"])
+	}
+	if got, _ := withEffort.ModelConfig["is_reasoning"].(bool); !got {
+		t.Errorf("model_config.is_reasoning = %v, want true", withEffort.ModelConfig["is_reasoning"])
+	}
+
+	rawNoEffort, err := buildAgentBody(msgs, "dmodel", nil, false, "")
+	if err != nil {
+		t.Fatalf("buildAgentBody: %v", err)
+	}
+	var noEffort struct {
+		ModelConfig map[string]any `json:"model_config"`
+	}
+	if err := json.Unmarshal(rawNoEffort, &noEffort); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if _, exists := noEffort.ModelConfig["reasoning_effort"]; exists {
+		t.Errorf("model_config.reasoning_effort should be omitted when empty, got %v", noEffort.ModelConfig["reasoning_effort"])
+	}
+}

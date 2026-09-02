@@ -79,6 +79,11 @@ func buildAgentBody(messages []map[string]any, modelKey string, tools []any, ena
 	now := time.Now()
 	newUUID := uuid4()
 
+	modelConfig := map[string]any{"key": modelKey, "is_reasoning": enableReasoning}
+	if reasoningEffort != "" {
+		modelConfig["reasoning_effort"] = reasoningEffort
+	}
+
 	base := map[string]any{
 		"request_id":       newUUID,
 		"chat_record_id":   newUUID,
@@ -91,13 +96,13 @@ func buildAgentBody(messages []map[string]any, modelKey string, tools []any, ena
 		"is_reply":         true,
 		"image_urls":       imageURLs,
 		"session_type":     "qodercli",
-		"model_config":     map[string]any{"key": modelKey, "is_reasoning": enableReasoning},
+		"model_config":     modelConfig,
 		"chat_context": map[string]any{
 			"chatPrompt": "",
 			"text":       qwTextContent(prompt, imageURLs),
 			"extra": map[string]any{
 				"context":         []any{},
-				"modelConfig":     map[string]any{"key": modelKey, "is_reasoning": enableReasoning},
+				"modelConfig":     modelConfig,
 				"originalContent": qwTextContent(prompt, imageURLs),
 			},
 			"features":  []any{},
