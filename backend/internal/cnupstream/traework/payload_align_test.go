@@ -25,7 +25,7 @@ func TestPrepareBody_AlignsClientFields(t *testing.T) {
 
 	// 上下文/输出上限（JSON 数字是 float64）
 	require.Equal(t, float64(1000000), obj["prompt_max_tokens"])
-	require.Equal(t, float64(4096), obj["max_tokens"])
+	require.Equal(t, float64(defaultMaxTokens), obj["max_tokens"])
 
 	// 会话/身份
 	require.NotEmpty(t, obj["conversation_id"])
@@ -58,4 +58,28 @@ func TestPrepareBody_NilAuth_NoIdentity(t *testing.T) {
 	// 但仍应有 model_name/prompt_max_tokens
 	require.Equal(t, "glm-5.2__dev", obj["model_name"])
 	require.Equal(t, float64(1000000), obj["prompt_max_tokens"])
+}
+
+// TestResolveMaxTokens 尊重客户端传值：max_completion_tokens 优先、其次 max_tokens、
+// 都没传用默认 128K。网关不硬砍客户端请求的输出长度。
+func TestResolveMaxTokens(t *testing.T) {
+	t.Run("客户端传 max_completion_tokens 优先", func(t *testing.T) {
+		obj := map[string]any{"max_completion_tokens": 30000, "max_tokens": 5000}
+		require.Equal(t, 30000, resolveMaxTokens(obj))
+	})
+	t.Run("仅 max_tokens", func(t *testing.T) {
+		obj := map[string]any{"max_tokens": 8000}
+		require.Equal(t, 8000, resolveMaxTokens(obj))
+	})
+	t.Run("都没传用默认 128K", func(t *testing.T) {
+		require.Equal(t, defaultMaxTokens, resolveMaxTokens(map[string]any{}))
+	})
+	t.Run("非数值忽略用默认", func(t *testing.T) {
+		obj := map[string]any{"max_tokens": "abc"}
+		require.Equal(t, defaultMaxTokens, resolveMaxTokens(obj))
+	})
+	t.Run("json.Number 支持", func(t *testing.T) {
+		obj := map[string]any{"max_tokens": json.Number("12000")}
+		require.Equal(t, 12000, resolveMaxTokens(obj))
+	})
 }

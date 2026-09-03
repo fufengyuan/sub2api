@@ -15,6 +15,32 @@ import (
 // 设置为 1M 即让 traework 账号直接用满 1M 上下文；"渐进探上限"时可外部改值。
 var promptMaxTokens = 1000000
 
+// defaultMaxTokens 是客户端未传输出上限时的默认值（128K）。
+const defaultMaxTokens = 131072
+
+// resolveMaxTokens 决定本次请求的 max_tokens（输出上限）：
+// 优先取客户端传的 max_completion_tokens，其次 max_tokens，都没传用默认 128K。
+// 真实客户端写死 4096 是其免费档上限，网关不硬砍客户端请求的输出长度。
+func resolveMaxTokens(obj map[string]any) int {
+	for _, k := range []string{"max_completion_tokens", "max_tokens"} {
+		if v, ok := obj[k]; ok {
+			switch n := v.(type) {
+			case float64:
+				return int(n)
+			case int:
+				return n
+			case int64:
+				return int(n)
+			case json.Number:
+				if i, err := n.Int64(); err == nil {
+					return int(i)
+				}
+			}
+		}
+	}
+	return defaultMaxTokens
+}
+
 // PrepareBody 把 OpenAI chat/completions 请求改写为 Trae SOLO llm_utils_chat 请求。
 // a 提供账号级身份字段（uid/device_id/machine_id 等），与真实客户端对齐：
 // 补 model_name(__dev)/prompt_max_tokens/max_tokens/conversation_id/session_id/
@@ -88,9 +114,12 @@ func PrepareBody(src []byte, a *auth.Auth) []byte {
 	// 之前给 config_name/model 追加 __max 触发 4001，但 model_name 是独立字段，
 	// 带 __dev 才是真实客户端形态（TraeWorkAssistant payload.rs）。
 	obj["model_name"] = model + "__dev"
-	// 上下文与输出上限对齐客户端（渐进探上限时可调 promptMaxTokens）。
+	// 上下文与输出上限：prompt_max_tokens 是输入上下文上限（1M，见 promptMaxTokens）；
+	// max_tokens 是单次回复输出上限——尊重客户端传值（max_tokens/max_completion_tokens
+	// 二选一，OpenAI 兼容），客户端没传才用默认 128K（131072，现代模型普遍支持）。
+	// 真实客户端写死 4096 是其免费档输出上限，网关不应硬砍客户端请求的输出长度。
 	obj["prompt_max_tokens"] = promptMaxTokens
-	obj["max_tokens"] = 4096
+	obj["max_tokens"] = resolveMaxTokens(obj)
 	// 会话/身份字段对齐客户端（uuid 用 stdlib crypto/rand 生成）。
 	obj["conversation_id"] = genUUIDLike()
 	obj["project_id"] = genUUIDLike()
