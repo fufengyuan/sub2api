@@ -166,7 +166,7 @@ func traeExpiryTime(v int64) string {
 }
 
 func (c *Client) ChatStream(a *auth.Auth, body []byte) (rc io.ReadCloser, status int, respBody []byte, err error) {
-	req, err := http.NewRequest(http.MethodPost, c.agentBase()+EpChat, bytes.NewReader(PrepareBody(body)))
+	req, err := http.NewRequest(http.MethodPost, c.agentBase()+EpChat, bytes.NewReader(PrepareBody(body, a)))
 	if err != nil {
 		return nil, 0, nil, err
 	}
@@ -209,8 +209,8 @@ func (c *Client) FetchModels(a *auth.Auth) ([]provider.ModelInfo, error) {
 		ConfigInfoList []struct {
 			ConfigName    string `json:"config_name"`
 			DisplayConfig struct {
-				DisplayName    string `json:"display_name"`
-				IsCustomModel  bool   `json:"is_custom_model"`
+				DisplayName   string `json:"display_name"`
+				IsCustomModel bool   `json:"is_custom_model"`
 			} `json:"display_config"`
 		} `json:"config_info_list"`
 	}
