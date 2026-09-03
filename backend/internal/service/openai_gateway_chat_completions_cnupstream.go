@@ -74,21 +74,12 @@ func (s *OpenAIGatewayService) forwardCnUpstreamChatCompletions(
 			forwardBody = rewritten
 		}
 	}
-
-	// TraeWork 上游的 "Max 1M 上下文" 控件 = 请求上游时给模型名追加 __max 后缀
-	// （经抓包确认：配置层 model 为裸名 DeepSeek-V4-Flash-Official，实际执行的上游
-	// 模型标识为 DeepSeek-V4-Flash-Official__max，且无独立上下文字段）。网关作为
-	// traework 账号的聚合分发层，默认对所有 traework 平台请求自动追加 __max 后缀，
-	// 从而默认启用 1M 上下文；客户端已带 __max 则幂等不重复追加（避免 xxx__max__max）。
-	// 计费模型名（billingModel/originalModel）保持不变，__max 仅用于上游识别上下文。
-	if account != nil && account.Platform == PlatformTraeWork {
-		upstreamModel := gjson.GetBytes(forwardBody, "model").String()
-		if withMax := ensureTraeWorkMaxSuffix(upstreamModel); withMax != upstreamModel {
-			if rewritten, err := sjson.SetBytes(forwardBody, "model", withMax); err == nil {
-				forwardBody = rewritten
-			}
-		}
-	}
+	// 注意：不要给 SOLO chat API 的 model 追加任何后缀（如 TraeWork 客户端遥测里的
+	// "__max"）。生产实测（2026-09-03）：带 "__max" 的模型名直接被上游 SOLO chat
+	// API 拒绝（4001 param is invalid），且 wild-work 协议参照仓库 payload.go 中
+	// model/config_name 均为裸名、无任何 __max 处理。__max 是 TraeWork 云端 agent
+	// 编排层（create_agent_task，应用层加密）的会话模型变体标识，与 SOLO chat API
+	// 的 model 参数无关；1M 上下文是云端会话能力，外部 chat API 调用拿不到。
 
 	firstTokenMs := int(time.Since(startTime).Milliseconds())
 	res, err := s.forwardCnUpstreamSinglePlatform(c, account, forwardBody, originalModel, billingModel, reqStream, startTime, firstTokenMs)
@@ -103,19 +94,6 @@ func (s *OpenAIGatewayService) forwardCnUpstreamChatCompletions(
 // 的恢复窗口，同时把单次请求的额外延迟控制在常数级（handler 侧限制最多退避
 // 两次，见 FailoverState.maxDeferredSwitchBackoffs）。
 const cnSoftRateSwitchBackoff = 2 * time.Second
-
-// ensureTraeWorkMaxSuffix 对 traework 上游的模型名幂等追加 __max 后缀：
-//
-//	DeepSeek-V4-Flash-Official         → DeepSeek-V4-Flash-Official__max
-//	DeepSeek-V4-Flash-Official__max    → DeepSeek-V4-Flash-Official__max（幂等）
-//
-// TraeWork 用 "__max" 后缀标记"Max 1M 上下文"能力（经抓包确认无独立上下文字段）。
-func ensureTraeWorkMaxSuffix(model string) string {
-	if strings.HasSuffix(model, "__max") {
-		return model
-	}
-	return model + "__max"
-}
 
 // CnRequestScopedFailureReason 标记「请求本身有问题」的 CN 上游失败（4026 上下文
 // 超限 / 4001 参数非法等）。handler 据此下发 400 + 明确文案而非 502。
