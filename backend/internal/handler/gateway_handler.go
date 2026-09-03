@@ -1122,10 +1122,10 @@ func (h *GatewayHandler) Models(c *gin.Context) {
 	}
 
 	if platform == service.PlatformGemini {
-		c.JSON(http.StatusOK, gin.H{
-			"object": "list",
-			"data":   geminicli.DefaultModels,
-		})
+		// geminicli.DefaultModels 也是 Anthropic 风格条目（created_at 字符串、
+		// 缺 object/created/owned_by），同样会让 agent 工具拉取失败。
+		// 走统一规范化输出，模型 ID 取自 geminicli 默认列表。
+		writeModelsList(c, platform, geminicliModelIDs())
 		return
 	}
 	if platform == service.PlatformGrok {
@@ -1133,10 +1133,9 @@ func (h *GatewayHandler) Models(c *gin.Context) {
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{
-		"object": "list",
-		"data":   claude.DefaultModels,
-	})
+	// 其余平台（含 CN 四渠道）兜底：claude.DefaultModels 同样是 Anthropic 风格条目，
+	// 走统一规范化输出，避免 agent 工具按 OpenAI 规范解析时拉取失败。
+	writeModelsList(c, platform, claudeModelIDs())
 }
 
 // CodexModels returns the effective group model list using the manifest shape
@@ -1243,15 +1242,102 @@ func (h *GatewayHandler) compositeAvailableModels(ctx context.Context, groupID *
 	return models
 }
 
+// openAIModelListItem 是 OpenAI /v1/models 规范条目。
+//
+// 规范字段（agent 工具「一键拉取模型」依赖它们）：
+//
+//	{"id":"gpt-4","object":"model","created":1687882411,"owned_by":"openai"}
+//
+// 额外保留 display_name / type / created_at：
+//   - display_name：管理端与部分客户端展示用，OpenAI 官方也带此字段
+//   - created_at：Anthropic 原生模型列表用的时间字符串。/v1/models 与根 /models
+//     共用本 handler，部分 Anthropic 客户端仍读 created_at，保留可避免回归。
+type openAIModelListItem struct {
+	ID          string `json:"id"`
+	Object      string `json:"object"`
+	Created     int64  `json:"created"`
+	OwnedBy     string `json:"owned_by"`
+	Type        string `json:"type,omitempty"`
+	DisplayName string `json:"display_name,omitempty"`
+	CreatedAt   string `json:"created_at,omitempty"`
+}
+
+// defaultModelCreatedTimestamp 是模型条目 created 的兜底值
+// （2024-01-01T00:00:00Z）。OpenAI 规范要求 created 是 Unix 秒级时间戳，
+// 此前本端点输出的是 Anthropic 风格字符串 created_at，agent 工具解析成整数时
+// 失败，导致「一键拉取模型」拉不出来。
+const defaultModelCreatedTimestamp int64 = 1704067200
+
+// geminicliModelIDs 提取 geminicli 默认模型的 ID 列表。
+// geminicli.DefaultModels 的条目是 Anthropic 风格，不能直接作为 /v1/models 输出，
+// 故只取其 ID 交给规范化输出。
+func geminicliModelIDs() []string {
+	ids := make([]string, 0, len(geminicli.DefaultModels))
+	for _, m := range geminicli.DefaultModels {
+		ids = append(ids, m.ID)
+	}
+	return ids
+}
+
+// claudeModelIDs 提取 claude 默认模型的 ID 列表（同上，只取 ID）。
+func claudeModelIDs() []string {
+	ids := make([]string, 0, len(claude.DefaultModels))
+	for _, m := range claude.DefaultModels {
+		ids = append(ids, m.ID)
+	}
+	return ids
+}
+
+// ownedByForPlatform 把平台映射为 OpenAI 规范的 owned_by 值。
+func ownedByForPlatform(platform string) string {
+	switch platform {
+	case service.PlatformOpenAI:
+		return "openai"
+	case service.PlatformAnthropic:
+		return "anthropic"
+	case service.PlatformGemini, "gemini-cli":
+		return "google"
+	case service.PlatformGrok:
+		return "xai"
+	case service.PlatformWorkBuddy:
+		return "workbuddy"
+	case service.PlatformTraeWork:
+		return "traework"
+	case service.PlatformQoder:
+		return "qoder"
+	case service.PlatformQwenWork:
+		return "qwenwork"
+	case service.PlatformComposite:
+		return "sub2api"
+	default:
+		if strings.TrimSpace(platform) == "" {
+			return "sub2api"
+		}
+		return platform
+	}
+}
+
+// writeModelsList 以 OpenAI /v1/models 规范输出模型列表。
+//
+// 此前本函数对所有非 Grok 平台都输出 Anthropic 风格条目
+// （{id,type,display_name,created_at:"2024-01-01T00:00:00Z"}），缺 object / created /
+// owned_by 三个规范字段，agent 工具（模型一键拉取）按 OpenAI 规范解析 data[].id 时
+// 校验 object=="model"、把 created 当整数解析而失败，表现为「拉不出模型」。
+// 根 /models（Anthropic 客户端）与本端点共用 handler，故保留 created_at 等
+// Anthropic 字段以维持兼容。
 func writeModelsList(c *gin.Context, platform string, modelIDs []string) {
 	if platform == service.PlatformGrok {
 		writeGrokModelsList(c, modelIDs)
 		return
 	}
-	models := make([]claude.Model, 0, len(modelIDs))
+	ownedBy := ownedByForPlatform(platform)
+	models := make([]openAIModelListItem, 0, len(modelIDs))
 	for _, modelID := range modelIDs {
-		models = append(models, claude.Model{
+		models = append(models, openAIModelListItem{
 			ID:          modelID,
+			Object:      "model",
+			Created:     defaultModelCreatedTimestamp,
+			OwnedBy:     ownedBy,
 			Type:        "model",
 			DisplayName: modelID,
 			CreatedAt:   "2024-01-01T00:00:00Z",
