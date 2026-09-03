@@ -802,6 +802,10 @@ type GatewayService struct {
 	sessionLimitCache     SessionLimitCache // 会话数量限制缓存（仅 Anthropic OAuth/SetupToken）
 	rpmCache              RPMCache          // RPM 计数缓存（仅 Anthropic OAuth/SetupToken）
 	userGroupRateResolver *userGroupRateResolver
+	// cnUpstream 承载国产渠道（workbuddy/traework/qoder/qwenwork）的账号池与
+	// 上游客户端。旧网关路径的积分折算计费依赖它查上游模型积分倍率；Wire 未
+	// 注入或积分折算未开启时为 nil，折算自动跳过（退回零成本 + WARN）。
+	cnUpstream *CnUpstreamService
 	userGroupRateCache    *gocache.Cache
 	userGroupRateSF       singleflight.Group
 	modelsListCache       *gocache.Cache
@@ -850,6 +854,7 @@ func NewGatewayService(
 	resolver *ModelPricingResolver,
 	balanceNotifyService *BalanceNotifyService,
 	userPlatformQuotaRepo UserPlatformQuotaRepository,
+	cnUpstream *CnUpstreamService,
 ) *GatewayService {
 	userGroupRateTTL := resolveUserGroupRateCacheTTL(cfg)
 	modelsListTTL := resolveModelsListCacheTTL(cfg)
@@ -877,6 +882,7 @@ func NewGatewayService(
 		sessionLimitCache:     sessionLimitCache,
 		rpmCache:              rpmCache,
 		userGroupRateCache:    gocache.New(userGroupRateTTL, time.Minute),
+		cnUpstream:            cnUpstream,
 		settingService:        settingService,
 		modelsListCache:       gocache.New(modelsListTTL, time.Minute),
 		modelsListCacheTTL:    modelsListTTL,

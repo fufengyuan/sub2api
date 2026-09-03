@@ -60,15 +60,20 @@ type CnUpstreamService struct {
 	// 调度器与管理端 HTTP 并发访问，mu 保护 map 读写。
 	mu       sync.Mutex
 	acctRefs map[string]*Account
+
+	// creditRateCache 缓存上游模型积分倍率（按平台+账号），供积分折算计费读取。
+	// 自带锁，独立于 mu 以避免与账号管理操作互相阻塞。
+	creditRateCache *cnCreditRateCache
 }
 
 // NewCnUpstreamService 构建三个平台各自的 Pool + Upstream。
 func NewCnUpstreamService(accountRepo cnAccountRepo, cfg *config.Config) *CnUpstreamService {
 	svc := &CnUpstreamService{
-		accountRepo: accountRepo,
-		cfg:         cfg,
-		platforms:   make(map[string]*cnUpstreamPlatform),
-		acctRefs:    make(map[string]*Account),
+		accountRepo:     accountRepo,
+		cfg:             cfg,
+		platforms:       make(map[string]*cnUpstreamPlatform),
+		acctRefs:        make(map[string]*Account),
+		creditRateCache: newCnCreditRateCache(),
 	}
 	svc.platforms[PlatformWorkBuddy] = &cnUpstreamPlatform{pool: pool.New(""), upstream: upstream.New()}
 	svc.platforms[PlatformTraeWork] = &cnUpstreamPlatform{pool: pool.New(""), upstream: traework.New()}

@@ -10,6 +10,7 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/pkg/ctxkey"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/timezone"
+	"go.uber.org/zap"
 )
 
 func (s *GatewayService) getUserGroupRateMultiplier(ctx context.Context, userID, groupID int64, groupDefaultMultiplier float64) float64 {
@@ -783,7 +784,7 @@ func (s *GatewayService) recordUsageCore(ctx context.Context, input *recordUsage
 	}
 
 	// 计算费用
-	cost := s.calculateRecordUsageCost(ctx, result, apiKey, billingModel, multiplier, imageMultiplier, pricingAt)
+	cost := s.calculateRecordUsageCost(ctx, result, apiKey, account, billingModel, multiplier, imageMultiplier, pricingAt)
 	// response_model：按上游成功响应自报的模型计费（渠道显式开启才生效）。
 	// 采纳条件见 responseModelBillingDeclaration + hasIdentifiedResponseModelPricing
 	// + responseModelBillingAdoptable。任一条件不满足都静默回落基线，即开启本模式前的
@@ -795,7 +796,7 @@ func (s *GatewayService) recordUsageCore(ctx context.Context, input *recordUsage
 		result.ImageCount > 0 || result.AudioUsage != nil || result.SearchCount > 0,
 	); responseModel != "" && !strings.EqualFold(responseModel, strings.TrimSpace(billingModel)) {
 		if identified, responseChannelPriced := s.hasIdentifiedResponseModelPricing(ctx, responseModel, apiKey); identified {
-			responseCost := s.calculateRecordUsageCost(ctx, result, apiKey, responseModel, multiplier, imageMultiplier, pricingAt)
+			responseCost := s.calculateRecordUsageCost(ctx, result, apiKey, account, responseModel, multiplier, imageMultiplier, pricingAt)
 			baselineChannelPriced := s.resolveChannelPricing(ctx, billingModel, apiKey) != nil
 			if responseModelBillingAdoptable(cost, responseCost, baselineChannelPriced, responseChannelPriced) {
 				// billingModel 到此为止只是定价查表的入参，后续流程只消费 cost，
@@ -877,10 +878,12 @@ func (s *GatewayService) recordUsageCore(ctx context.Context, input *recordUsage
 }
 
 // calculateRecordUsageCost 根据请求类型计算费用。
+// account 用于国产渠道积分折算（需按账号查上游模型倍率），其余计费路径不使用。
 func (s *GatewayService) calculateRecordUsageCost(
 	ctx context.Context,
 	result *ForwardResult,
 	apiKey *APIKey,
+	account *Account,
 	billingModel string,
 	multiplier float64,
 	imageMultiplier float64,
@@ -889,7 +892,7 @@ func (s *GatewayService) calculateRecordUsageCost(
 	// 图片生成：渠道定价为 token 计费时走 token 路径，否则走图片计费
 	if result.ImageCount > 0 {
 		if resolved := s.resolveChannelPricing(ctx, billingModel, apiKey); resolved != nil && resolved.Mode == BillingModeToken {
-			return s.calculateTokenCost(ctx, result, apiKey, billingModel, multiplier, pricingAt)
+			return s.calculateTokenCost(ctx, result, apiKey, account, billingModel, multiplier, pricingAt)
 		}
 		return s.calculateImageCost(ctx, result, apiKey, billingModel, imageMultiplier)
 	}
@@ -913,7 +916,7 @@ func (s *GatewayService) calculateRecordUsageCost(
 	}
 
 	// Token 计费；SearchCount 为叠加 surcharge（不替代 token）。
-	tokenCost := s.calculateTokenCost(ctx, result, apiKey, billingModel, multiplier, pricingAt)
+	tokenCost := s.calculateTokenCost(ctx, result, apiKey, account, billingModel, multiplier, pricingAt)
 	if result.SearchCount > 0 {
 		price := groupSearchPricePer1kFromAPIKey(apiKey)
 		if price != nil && *price == 0 {
@@ -1071,6 +1074,7 @@ func (s *GatewayService) calculateTokenCost(
 	ctx context.Context,
 	result *ForwardResult,
 	apiKey *APIKey,
+	account *Account,
 	billingModel string,
 	multiplier float64,
 	pricingAt time.Time,
@@ -1103,7 +1107,26 @@ func (s *GatewayService) calculateTokenCost(
 		Resolved:       resolved,
 	})
 	if err != nil {
-		logger.LegacyPrintf("service.gateway", "Calculate cost failed: %v", err)
+		// 无价可循不是系统故障：请求已成功完成，只是计费侧缺价。按零成本落账
+		// 并降级为 WARN，避免已知未收录模型（如 CN 渠道动态模型）刷 ERROR 淹没
+		// 真实故障。与新网关路径 openai_gateway_usage.go 行为保持一致。
+		if !isUsagePricingUnavailableError(err) {
+			logger.LegacyPrintf("service.gateway", "Calculate cost failed: %v", err)
+			return &CostBreakdown{ActualCost: 0}
+		}
+		// 国产渠道按上游积分倍率计价，不依赖内置价卡：缺 token 价卡时先尝试
+		// 积分折算，折算成功则按积分成本落账，避免这类渠道的用量恒为零成本。
+		if creditCost, ok := s.tryCnCreditCost(ctx, account, billingModel, multiplier); ok {
+			return creditCost
+		}
+		logger.L().With(
+			zap.String("component", "service.gateway"),
+			zap.String("billing_model", billingModel),
+			zap.String("requested_model", result.Model),
+			zap.String("upstream_model", result.UpstreamModel),
+			zap.String("platform", PlatformFromAPIKey(apiKey)),
+			zap.String("request_id", result.RequestID),
+		).Warn("usage.pricing_missing_record_zero_cost", zap.Error(err))
 		return &CostBreakdown{ActualCost: 0}
 	}
 	return cost

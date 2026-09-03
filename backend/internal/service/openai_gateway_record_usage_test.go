@@ -2795,6 +2795,7 @@ func TestGatewayServiceCalculateRecordUsageCost_ChannelImageBillingUsesImageCoun
 		context.Background(),
 		&ForwardResult{Model: "gemini-image", ImageCount: 2, ImageSize: "1K"},
 		&APIKey{GroupID: i64p(groupID), Group: &Group{ID: groupID}},
+		nil, // account（国产渠道积分折算子；非 CN 平台不参与）
 		"gemini-image",
 		0.15,
 		1.0,
@@ -2834,6 +2835,7 @@ func TestGatewayServiceCalculateRecordUsageCost_ChannelImageBillingUsesSizeTier(
 		context.Background(),
 		&ForwardResult{Model: "gemini-image", ImageCount: 2, ImageSize: "4K"},
 		&APIKey{GroupID: i64p(groupID), Group: &Group{ID: groupID}},
+		nil, // account
 		"gemini-image",
 		1.0,
 		1.0,
@@ -2866,6 +2868,7 @@ func TestGatewayServiceCalculateRecordUsageCost_GroupImagePriceOverridesChannelI
 				ImagePrice2K: &groupImagePrice2K,
 			},
 		},
+		nil, // account
 		"gemini-image",
 		1.0,
 		1.0,
@@ -2955,6 +2958,7 @@ func TestGatewayServiceCalculateRecordUsageCost_ChannelImageBillingNormalizesMis
 		context.Background(),
 		&ForwardResult{Model: "gemini-image", ImageCount: 2, ImageSize: ""},
 		&APIKey{GroupID: i64p(groupID), Group: &Group{ID: groupID}},
+		nil, // account
 		"gemini-image",
 		1.0,
 		1.0,

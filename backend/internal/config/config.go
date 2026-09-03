@@ -104,6 +104,7 @@ type Config struct {
 	BatchImage              BatchImageConfig              `mapstructure:"batch_image"`
 	ImageStorage            ImageStorageConfig            `mapstructure:"image_storage"`
 	Checkin                 CheckinConfig                 `mapstructure:"checkin"`
+	CnCreditPricing         CnCreditPricingConfig         `mapstructure:"cn_credit_pricing"`
 	Plugins                 PluginConfig                  `mapstructure:"plugins"`
 }
 
@@ -289,6 +290,19 @@ func (c *ImageStorageConfig) MissingCredentialKeys() []string {
 		missing = append(missing, "image_storage.secret_access_key")
 	}
 	return missing
+}
+
+// CnCreditPricingConfig 国产渠道（workbuddy/traework/qoder/qwenwork）积分定价配置。
+//
+// 国产上游按「积分」计费：每个模型有倍率 Rate（每次请求消耗的积分数，来自上游
+// /models 接口的 consumption_rate / price_factor / credits 字段），网关需把它折算
+// 成 USD 才能进入统一计费链路。
+//
+// CreditToUSD 是 1 积分对应的美元金额，运营者按实际采购成本填写；默认 0 表示
+// 关闭积分折算（未收录模型仍按零成本落账 + WARN，行为与改动前一致）。
+type CnCreditPricingConfig struct {
+	Enabled     bool    `mapstructure:"enabled"`
+	CreditToUSD float64 `mapstructure:"credit_to_usd"`
 }
 
 // CheckinConfig 定时签到配置。
@@ -2595,6 +2609,11 @@ func setEnvReachableDefaults() {
 	viper.SetDefault("checkin.times", []string{})
 	viper.SetDefault("checkin.keepalive_hours", []int{})
 	viper.SetDefault("checkin.backoff_seconds", 0)
+
+	// 国产渠道积分折算：默认关闭。开启后需配置 credit_to_usd（1 积分 = ? USD），
+	// 未配置时保持零成本落账的既有行为，不会误扣用户余额。
+	viper.SetDefault("cn_credit_pricing.enabled", false)
+	viper.SetDefault("cn_credit_pricing.credit_to_usd", 0.0)
 
 	viper.SetDefault("gateway.forced_codex_instructions_template_file", "")
 	viper.SetDefault("gateway.session_idle_timeout_minutes", 0)

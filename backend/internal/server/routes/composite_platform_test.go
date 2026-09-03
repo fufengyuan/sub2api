@@ -148,7 +148,7 @@ func newCompositePoolRouter(t *testing.T, poolPlatforms ...string) *gin.Engine {
 	gatewayService := service.NewGatewayService(
 		&compositePoolAccountRepoStub{platforms: poolPlatforms},
 		nil, nil, nil, nil, nil, nil, nil, cfg, nil, nil, nil, nil, nil,
-		nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+		nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
 	gatewayHandler := handler.NewGatewayHandler(
 		gatewayService, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, cfg, nil)
 

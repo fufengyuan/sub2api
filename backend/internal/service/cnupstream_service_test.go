@@ -55,6 +55,10 @@ type fakeCnUpstream struct {
 	models      []provider.ModelInfo
 	modelsErr   error
 	checkinCall int
+	// pricing 覆盖 FetchModelPricing 返回的模型积分倍率表；
+	// pricingErr 用于模拟上游倍率接口失败（应静默降级，不阻断计费）。
+	pricing    []provider.ModelPricing
+	pricingErr error
 	// chatFn 覆盖 ChatStream 行为；chatCalls 按调用顺序记录被选中的账号 ID。
 	chatFn    func(a *auth.Auth, body []byte) (io.ReadCloser, int, []byte, error)
 	chatCalls []int64
@@ -72,7 +76,10 @@ func (f *fakeCnUpstream) FetchModels(a *auth.Auth) ([]provider.ModelInfo, error)
 	return f.models, f.modelsErr
 }
 func (f *fakeCnUpstream) FetchModelPricing(a *auth.Auth) ([]provider.ModelPricing, error) {
-	return nil, nil
+	if f.pricingErr != nil {
+		return nil, f.pricingErr
+	}
+	return f.pricing, nil
 }
 func (f *fakeCnUpstream) UserResource(a *auth.Auth) (int64, error) {
 	return f.remain, f.remainErr

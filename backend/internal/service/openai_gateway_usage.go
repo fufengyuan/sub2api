@@ -640,16 +640,7 @@ func isGrokVideoUsageResult(result *OpenAIForwardResult, billingModels []string)
 	return true
 }
 
-func isUsagePricingUnavailableError(err error) bool {
-	if err == nil {
-		return false
-	}
-	if errors.Is(err, ErrModelPricingUnavailable) {
-		return true
-	}
-	msg := strings.ToLower(err.Error())
-	return strings.Contains(msg, "no pricing available") || strings.Contains(msg, "pricing not found")
-}
+// isUsagePricingUnavailableError 已抽到 usage_pricing_shared.go，两条网关路径共用。
 
 func (s *OpenAIGatewayService) calculateOpenAIRecordUsageTokenCost(
 	ctx context.Context,
