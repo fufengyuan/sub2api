@@ -201,47 +201,164 @@ func sortInts(a []int) {
 
 // streamAsOpenAI 把嵌套 SSE 流边读边转写为标准 OpenAI SSE 给客户端。
 // 每个 chunk 重写 model 字段为客户端模型名；末尾补 data: [DONE]。
+//
+// 输出严格对齐 OpenAI Chat Completions 流式规范（对照 apicompat 参考实现）：
+//  1. 首 chunk 必须带 delta.role="assistant"（上游未给则补，且只出现一次）
+//  2. choices[].finish_reason 恒定存在：中间 chunk 为 null，末 chunk 为具体原因
+//  3. reasoning_content 与 content 不同处一个 delta（上游混发时拆成两个 chunk）
+//  4. usage 是 finish chunk 之后的独立 chunk，choices 为空数组
+//     （挂在 finish chunk 上会让客户端收到 finish_reason 就停止解析而丢 usage）
 func streamAsOpenAI(w io.Writer, r io.Reader, model string, flush func()) error {
-	sawDone := false
-	err := parseNestedSSE(r, func(chunk map[string]any) error {
-		chunk["model"] = model
-		normalizeStreamFinishReason(chunk)
-		raw, _ := json.Marshal(chunk)
+	sawAnyChunk := false
+	// pendingUsage 暂存上游 usage：规范要求在 finish chunk 之后单独下发。
+	var pendingUsage map[string]any
+
+	// write 序列化并写出一个 SSE 事件。
+	// 首 chunk（带 delta 的第一个 chunk）在此统一注入 delta.role="assistant"，
+	// 覆盖全部分支（普通 delta、拆分的 reasoning delta、兜底 finish chunk），
+	// 避免只在某条路径注入导致漏补。
+	write := func(chunk map[string]any) error {
+		if !sawAnyChunk {
+			if choices, ok := chunk["choices"].([]any); ok && len(choices) > 0 {
+				if c, ok := choices[0].(map[string]any); ok {
+					if delta, ok := c["delta"].(map[string]any); ok {
+						if _, hasRole := delta["role"]; !hasRole {
+							delta["role"] = "assistant"
+						}
+					}
+				}
+			}
+		}
+		raw, err := json.Marshal(chunk)
+		if err != nil {
+			return err
+		}
 		if _, err := fmt.Fprintf(w, "data: %s\n\n", raw); err != nil {
 			return err
 		}
 		if flush != nil {
 			flush()
 		}
+		sawAnyChunk = true
+		return nil
+	}
+	// writeDelta 写出一个普通 delta chunk（中间片，finish_reason 恒为 null）。
+	// role 注入由上面的 write 统一处理。
+	writeDelta := func(delta map[string]any) error {
+		chunk := map[string]any{
+			"model": model,
+			"choices": []any{
+				map[string]any{
+					"index":         0,
+					"delta":         delta,
+					"finish_reason": nil,
+				},
+			},
+		}
+		return write(chunk)
+	}
+	// writeUsage 写出独立 usage chunk（choices 为空数组）。
+	writeUsage := func() error {
+		if pendingUsage == nil {
+			return nil
+		}
+		err := write(map[string]any{
+			"model":   model,
+			"choices": []any{},
+			"usage":   pendingUsage,
+		})
+		pendingUsage = nil
+		return err
+	}
+
+	err := parseNestedSSE(r, func(chunk map[string]any) error {
+		// usage 先抽出来暂存，绝不与 finish_reason 同处一个 chunk。
+		if u, ok := chunk["usage"].(map[string]any); ok {
+			pendingUsage = u
+			delete(chunk, "usage")
+		}
+		chunk["model"] = model
+
+		choices, _ := chunk["choices"].([]any)
+		// usage-only chunk（无 choices 或 choices 为空）：不再单独下发，
+		// 其 usage 已在上面暂存，将由末尾的独立 usage chunk 输出。
+		if len(choices) == 0 {
+			return nil
+		}
+
+		// 逐个 choice 规范化。当前上游只会有 index=0 单 choice，
+		// 但按数组遍历以免将来上游变化被漏掉。
+		var finishReason string
+		for _, ci := range choices {
+			c, _ := ci.(map[string]any)
+			if c == nil {
+				continue
+			}
+			if fr, ok := c["finish_reason"].(string); ok && fr != "" {
+				finishReason = fr
+			}
+			// finish_reason 恒定存在：末 chunk 保留具体原因，其余为 null。
+			if finishReason == "" {
+				c["finish_reason"] = nil
+			}
+		}
+
+		var delta map[string]any
+		if len(choices) > 0 {
+			delta, _ = choices[0].(map[string]any)["delta"].(map[string]any)
+		}
+		if delta != nil {
+			reasoning, hasReasoning := delta["reasoning_content"].(string)
+			_, hasContent := delta["content"]
+			// reasoning 与 content 同处一个 delta 时拆成两个 chunk 顺序下发，
+			// 与 DeepSeek-reasoner 形态一致（先思考后正文）。
+			if hasReasoning && reasoning != "" && hasContent {
+				split := map[string]any{"reasoning_content": reasoning}
+				if err := writeDelta(split); err != nil {
+					return err
+				}
+				delete(delta, "reasoning_content")
+			}
+		}
+
+		if err := write(chunk); err != nil {
+			return err
+		}
+		// finish chunk 之后立即输出独立 usage chunk。
+		if finishReason != "" {
+			return writeUsage()
+		}
 		return nil
 	})
 	if err != nil {
 		return err
 	}
-	if !sawDone {
-		if _, err := io.WriteString(w, "data: [DONE]\n\n"); err != nil {
+	// 上游未给 finish_reason 就结束（中断/无末片）时兜底：
+	// 补 finish chunk + usage，否则客户端判定流被截断且 usage 丢失。
+	if pendingUsage != nil || !sawAnyChunk {
+		if err := write(map[string]any{
+			"model": model,
+			"choices": []any{
+				map[string]any{
+					"index":         0,
+					"delta":         map[string]any{},
+					"finish_reason": "stop",
+				},
+			},
+		}); err != nil {
 			return err
 		}
-		if flush != nil {
-			flush()
+		if err := writeUsage(); err != nil {
+			return err
 		}
+	}
+	if _, err := io.WriteString(w, "data: [DONE]\n\n"); err != nil {
+		return err
+	}
+	if flush != nil {
+		flush()
 	}
 	return nil
-}
-
-// normalizeStreamFinishReason 把 choices[].finish_reason 的空串规范化为 null，
-// 避免客户端把中间 chunk 的空串误判为「流已结束」（只收 1 个分片就中断）。
-func normalizeStreamFinishReason(chunk map[string]any) {
-	choices, _ := chunk["choices"].([]any)
-	for _, ci := range choices {
-		c, _ := ci.(map[string]any)
-		if c == nil {
-			continue
-		}
-		if fr, ok := c["finish_reason"].(string); ok && fr == "" {
-			c["finish_reason"] = nil
-		}
-	}
 }
 
 // Stream 实现 provider.Upstream：嵌套 SSE → 标准 OpenAI SSE 透传。

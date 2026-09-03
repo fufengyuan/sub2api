@@ -132,6 +132,145 @@ func TestStream_FirstChunk_HasDeltaRoleAssistant(t *testing.T) {
 	}
 }
 
+// TestStream_UsageIsSeparateChunkWithEmptyChoices
+// 回归:usage 必须是 finish chunk 之后的**独立** chunk,且 choices 为空数组。
+// OpenAI 规范(参考 apicompat.resToChatHandleCompleted):finish chunk 与 usage chunk
+// 是两个 SSE 事件。把 usage 挂在 finish chunk 上会让部分客户端收到 finish_reason
+// 就停止解析,导致 usage 丢失(表现为 token 数恒为 0、计费异常)。
+func TestStream_UsageIsSeparateChunkWithEmptyChoices(t *testing.T) {
+	in := "" +
+		"event: output\n" +
+		"data: {\"response\":\"hello\"}\n" +
+		"\n" +
+		"event: token_usage\n" +
+		"data: {\"prompt_tokens\":11,\"completion_tokens\":7,\"total_tokens\":18}\n" +
+		"\n" +
+		"event: done\n" +
+		"data: {\"finish_reason\":\"stop\"}\n" +
+		"\n"
+
+	chunks := streamToChunks(t, in)
+	// 期望:content chunk + finish chunk + usage chunk = 3
+	if len(chunks) != 3 {
+		t.Fatalf("chunks len = %d, want 3 (content + finish + usage)", len(chunks))
+	}
+
+	finishChunk := chunks[1]
+	finishChoices, _ := finishChunk["choices"].([]any)
+	fc, _ := finishChoices[0].(map[string]any)
+	if fc["finish_reason"] != "stop" {
+		t.Errorf("finish chunk finish_reason = %v, want stop", fc["finish_reason"])
+	}
+	if _, hasUsage := finishChunk["usage"]; hasUsage {
+		t.Errorf("finish chunk 不应携带 usage(应独立成 chunk): %v", finishChunk)
+	}
+
+	usageChunk := chunks[2]
+	if _, hasUsage := usageChunk["usage"]; !hasUsage {
+		t.Fatalf("usage chunk 缺少 usage 字段: %v", usageChunk)
+	}
+	// choices 必须是空数组(不是缺字段、不是带一个空 choice)。
+	ch, ok := usageChunk["choices"].([]any)
+	if !ok {
+		t.Fatalf("usage chunk choices 应为数组, got %T", usageChunk["choices"])
+	}
+	if len(ch) != 0 {
+		t.Errorf("usage chunk choices 应为空数组, got len=%d: %v", len(ch), ch)
+	}
+	u, _ := usageChunk["usage"].(map[string]any)
+	if int(u["prompt_tokens"].(float64)) != 11 || int(u["completion_tokens"].(float64)) != 7 {
+		t.Errorf("usage 内容不符: %v", u)
+	}
+}
+
+// TestStream_ReasoningAndContentSplitIntoSeparateChunks
+// 回归:SOLO 上游同一个 output 事件同时给 reasoning_content 与 response 时,
+// 必须拆成两个 delta 分发的 chunk —— OpenAI 官方流里二者不会同处一个 delta,
+// 混在一起客户端无法判断"思考在哪结束、正文从哪开始",zcode 会渲染成零散小块。
+func TestStream_ReasoningAndContentSplitIntoSeparateChunks(t *testing.T) {
+	in := "" +
+		"event: output\n" +
+		"data: {\"response\":\"hi\",\"reasoning_content\":\"think\"}\n" +
+		"\n" +
+		"event: done\n" +
+		"data: {\"finish_reason\":\"stop\"}\n" +
+		"\n"
+
+	chunks := streamToChunks(t, in)
+	// 期望:reasoning chunk + content chunk + finish chunk = 3
+	if len(chunks) != 3 {
+		t.Fatalf("chunks len = %d, want 3 (reasoning + content + finish)", len(chunks))
+	}
+
+	// 第 1 个:只有 reasoning_content,不能同时有 content。
+	firstDelta := deltaOf(t, chunks[0])
+	if firstDelta["reasoning_content"] != "think" {
+		t.Errorf("chunk0 reasoning_content = %v, want think", firstDelta["reasoning_content"])
+	}
+	if _, hasContent := firstDelta["content"]; hasContent {
+		t.Errorf("chunk0 不应同时携带 content(应与 reasoning 拆分): %v", firstDelta)
+	}
+	// 首 chunk 带 role。
+	if firstDelta["role"] != "assistant" {
+		t.Errorf("chunk0 role = %v, want assistant", firstDelta["role"])
+	}
+
+	// 第 2 个:只有 content。
+	secondDelta := deltaOf(t, chunks[1])
+	if secondDelta["content"] != "hi" {
+		t.Errorf("chunk1 content = %v, want hi", secondDelta["content"])
+	}
+	if _, hasReasoning := secondDelta["reasoning_content"]; hasReasoning {
+		t.Errorf("chunk1 不应携带 reasoning_content: %v", secondDelta)
+	}
+}
+
+// TestStream_UpstreamEOFWithoutDone_StillEmitsFinishAndUsage
+// 回归:上游未发 done 就 EOF(连接中断)时,兜底路径也必须补 finish chunk + usage,
+// 否则客户端判定流被截断,且已收到的 token_usage 会丢失(计费侧丢 usage)。
+func TestStream_UpstreamEOFWithoutDone_StillEmitsFinishAndUsage(t *testing.T) {
+	in := "" +
+		"event: output\n" +
+		"data: {\"response\":\"partial\"}\n" +
+		"\n" +
+		"event: token_usage\n" +
+		"data: {\"prompt_tokens\":5,\"completion_tokens\":2,\"total_tokens\":7}\n" +
+		"\n"
+
+	chunks := streamToChunks(t, in)
+	if len(chunks) < 3 {
+		t.Fatalf("chunks len = %d, want >= 3 (content + finish + usage)", len(chunks))
+	}
+
+	last := chunks[len(chunks)-1]
+	if _, hasUsage := last["usage"]; !hasUsage {
+		t.Errorf("EOF 兜底路径应补发 usage chunk, 末 chunk = %v", last)
+	}
+	// 倒数第二个应是 finish chunk。
+	prev := chunks[len(chunks)-2]
+	pc, _ := prev["choices"].([]any)
+	if len(pc) != 1 {
+		t.Fatalf("finish chunk choices len = %d, want 1: %v", len(pc), prev)
+	}
+	if pc[0].(map[string]any)["finish_reason"] != "stop" {
+		t.Errorf("EOF 兜底 finish_reason = %v, want stop", pc[0].(map[string]any)["finish_reason"])
+	}
+}
+
+// deltaOf 取出 chunk 的 choices[0].delta。
+func deltaOf(t *testing.T, chunk map[string]any) map[string]any {
+	t.Helper()
+	choices, _ := chunk["choices"].([]any)
+	if len(choices) == 0 {
+		t.Fatalf("chunk 无 choices: %v", chunk)
+	}
+	d, _ := choices[0].(map[string]any)["delta"].(map[string]any)
+	if d == nil {
+		t.Fatalf("chunk 无 delta: %v", chunk)
+	}
+	return d
+}
+
 // TestStream_DoneWithoutAnyOutput_FirstChunkStillHasRole
 // 边界:上游未产出任何 output 就直接 done(极短/空响应)时,写出的唯一 chunk 同时
 // 是首 chunk 与末 chunk,也必须带 delta.role="assistant",否则客户端从未收到 role。

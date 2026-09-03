@@ -445,6 +445,7 @@ func (s *OpenAIGatewayService) forwardCnUpstreamSinglePlatform(
 		agg = map[string]any{}
 	}
 	usage = usageFromCnUpstreamAggregate(agg)
+	normalizeCnAggregateResponse(agg, billingModel, originalModel)
 	respJSON, err := json.Marshal(agg)
 	if err != nil {
 		return nil, fmt.Errorf("cnupstream: marshal aggregated response: %w", err)
@@ -544,6 +545,65 @@ func (s *OpenAIGatewayService) cnInvokeChatStream(platform string, accountID int
 
 func isCnResponseCommitted(c *gin.Context) bool {
 	return c != nil && c.Writer != nil && c.Writer.Written()
+}
+
+// normalizeCnAggregateResponse 把 CN 渠道非流式聚合响应补齐 OpenAI 规范字段。
+//
+// 两条真实偏差：
+//  1. model 为空串：traework 的 Aggregate 里 model 恒为 ""（上游不返回模型名），
+//     而 qoder/qwenwork 用的是池内 lastClientModel。客户端收到 model:"" 会让
+//     部分 SDK 的响应校验/展示异常。这里统一回填客户端请求的模型名。
+//  2. usage 字段缺失：上游未下发 token_usage 时聚合结果里没有 usage，而 OpenAI
+//     规范里 usage 是恒定字段（即使上游没给也应返回零值），缺字段会让客户端
+//     在计算/展示 token 时取到 undefined。
+func normalizeCnAggregateResponse(agg map[string]any, billingModel, requestedModel string) {
+	if agg == nil {
+		return
+	}
+	// model：优先保留聚合结果里已有的非空值（qoder/qwenwork 已填），
+	// 为空则依次回退到计费模型名、客户端请求的模型名。
+	if m, _ := agg["model"].(string); strings.TrimSpace(m) == "" {
+		if strings.TrimSpace(billingModel) != "" {
+			agg["model"] = billingModel
+		} else {
+			agg["model"] = requestedModel
+		}
+	}
+	// object 必须是 "chat.completion"（聚合失败被置成空 map 时补上）。
+	if obj, _ := agg["object"].(string); strings.TrimSpace(obj) == "" {
+		agg["object"] = "chat.completion"
+	}
+	// usage：缺失时补零值，保证字段恒定存在。
+	if _, ok := agg["usage"].(map[string]any); !ok {
+		agg["usage"] = map[string]any{
+			"prompt_tokens":     0,
+			"completion_tokens": 0,
+			"total_tokens":      0,
+		}
+	}
+	// choices[0] 必须带 index 与 finish_reason（聚合失败/上游缺字段时兜底）。
+	choices, _ := agg["choices"].([]any)
+	if len(choices) == 0 {
+		agg["choices"] = []any{map[string]any{
+			"index":         0,
+			"message":       map[string]any{"role": "assistant", "content": ""},
+			"finish_reason": "stop",
+		}}
+		return
+	}
+	if c, ok := choices[0].(map[string]any); ok {
+		if _, hasIndex := c["index"]; !hasIndex {
+			c["index"] = 0
+		}
+		if fr, _ := c["finish_reason"].(string); strings.TrimSpace(fr) == "" {
+			c["finish_reason"] = "stop"
+		}
+		if msg, ok := c["message"].(map[string]any); ok {
+			if role, _ := msg["role"].(string); strings.TrimSpace(role) == "" {
+				msg["role"] = "assistant"
+			}
+		}
+	}
 }
 
 // usageFromCnUpstreamAggregate 从聚合后的 OpenAI chat.completion 对象抽取 usage。

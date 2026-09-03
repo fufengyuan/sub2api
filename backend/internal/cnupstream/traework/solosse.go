@@ -304,7 +304,7 @@ func sortInts(a []int) {
 }
 
 // ErrStreamErrorBeforeOutput 表示上游 SSE 流在尚未产出任何内容时就返回了业务错误
-//（如 4008/4028 间歇配额超限 / 1005 权益不足）。流式转换层据此不写错误 chunk，交由
+// （如 4008/4028 间歇配额超限 / 1005 权益不足）。流式转换层据此不写错误 chunk，交由
 // 上层在未写出响应时换账号重试。
 var ErrStreamErrorBeforeOutput = errors.New("cnupstream: upstream business error before any output")
 
@@ -369,6 +369,22 @@ func streamOpts(w http.ResponseWriter, r io.Reader, onErr func(*SOLOStreamError)
 	// 此时也必须带 role，否则客户端从未收到 role，仍不符合 OpenAI 规范。
 	wroteAnyChunk := false
 	st := &sseState{}
+	// writeSSEChunk 序列化 chunk 并写出一个 SSE 事件，写完立刻 flush。
+	// 所有 chunk（含 usage chunk）统一走这里，保证 flush 语义一致。
+	writeSSEChunk := func(chunk map[string]any) error {
+		raw, err := json.Marshal(chunk)
+		if err != nil {
+			return err
+		}
+		if _, err := io.WriteString(w, "data: "+string(raw)+"\n\n"); err != nil {
+			return err
+		}
+		if fl != nil {
+			fl.Flush()
+		}
+		wroteAnyChunk = true
+		return nil
+	}
 	writeChunk := func(delta map[string]any, finish string) error {
 		chunk := map[string]any{
 			"id":      id,
@@ -400,19 +416,26 @@ func streamOpts(w http.ResponseWriter, r io.Reader, onErr func(*SOLOStreamError)
 				delta["role"] = "assistant"
 			}
 		}
-		if pendingUsage != nil {
-			chunk["usage"] = pendingUsage
-			pendingUsage = nil
+		return writeSSEChunk(chunk)
+	}
+	// writeUsageChunk 输出独立的 usage chunk（OpenAI 规范：choices 必须是空数组，
+	// 且 usage 不与 finish_reason 同处一个 chunk —— 参考 apicompat 的
+	// resToChatHandleCompleted：finish chunk 与 usage chunk 是两个独立 SSE 事件）。
+	// 挂在 finish chunk 上会让部分客户端在收到 finish_reason 时就停止解析，
+	// 从而丢掉 usage（计费/展示侧表现为 token 数恒为 0）。
+	writeUsageChunk := func(u map[string]any) error {
+		if u == nil {
+			return nil
 		}
-		raw, _ := json.Marshal(chunk)
-		if _, err := io.WriteString(w, "data: "+string(raw)+"\n\n"); err != nil {
-			return err
+		chunk := map[string]any{
+			"id":      id,
+			"object":  "chat.completion.chunk",
+			"created": time.Now().Unix(),
+			"model":   "",
+			"choices": []any{},
+			"usage":   u,
 		}
-		if fl != nil {
-			fl.Flush()
-		}
-		wroteAnyChunk = true
-		return nil
+		return writeSSEChunk(chunk)
 	}
 	writeDONE := func() error {
 		if _, err := io.WriteString(w, "data: [DONE]\n\n"); err != nil {
@@ -432,12 +455,20 @@ func streamOpts(w http.ResponseWriter, r io.Reader, onErr func(*SOLOStreamError)
 		if ev := scanLine(st, strings.TrimRight(line, "\r\n")); ev != nil {
 			switch ev.Event {
 			case "output":
+				// SOLO 上游会在同一个 output 事件里同时给 response（正文）与
+				// reasoning_content（思考）。OpenAI 官方流里二者**不会同处一个 delta**
+				// ——混在一起时客户端无法判断"思考在哪结束、正文从哪开始"，zcode 等会
+				// 把它渲染成一串零散的"思考"小段。这里拆成两个 SSE chunk 顺序下发，
+				// 与 DeepSeek-reasoner 的 delta 形态对齐（先 reasoning 后 content）。
+				if ev.Reasoning != "" {
+					sawOutput = true
+					if err := writeChunk(map[string]any{"reasoning_content": ev.Reasoning}, ""); err != nil {
+						return err
+					}
+				}
 				delta := map[string]any{}
 				if ev.Response != "" {
 					delta["content"] = ev.Response
-				}
-				if ev.Reasoning != "" {
-					delta["reasoning_content"] = ev.Reasoning
 				}
 				if len(ev.ToolCalls) > 0 && string(ev.ToolCalls) != "null" {
 					var tc []map[string]any
@@ -471,6 +502,13 @@ func streamOpts(w http.ResponseWriter, r io.Reader, onErr func(*SOLOStreamError)
 				if err := writeChunk(map[string]any{}, ev.FinishReason); err != nil {
 					return err
 				}
+				// usage 必须是 finish chunk 之后的独立 chunk（choices: []）。
+				if pendingUsage != nil {
+					if err := writeUsageChunk(pendingUsage); err != nil {
+						return err
+					}
+					pendingUsage = nil
+				}
 				if err := writeDONE(); err != nil {
 					return err
 				}
@@ -495,6 +533,12 @@ func streamOpts(w http.ResponseWriter, r io.Reader, onErr func(*SOLOStreamError)
 				if err := writeChunk(map[string]any{"content": msg}, "stop"); err != nil {
 					return err
 				}
+				if pendingUsage != nil {
+					if err := writeUsageChunk(pendingUsage); err != nil {
+						return err
+					}
+					pendingUsage = nil
+				}
 				if err := writeDONE(); err != nil {
 					return err
 				}
@@ -507,6 +551,17 @@ func streamOpts(w http.ResponseWriter, r io.Reader, onErr func(*SOLOStreamError)
 	}
 	if !sawDone {
 		// 幂等兜底：上游中断（无 done）仍写 [DONE]。
+		// 先补 finish chunk + usage，否则流被客户端判定为截断，
+		// 且已收到的 token_usage 会丢失（计费侧丢 usage）。
+		if err := writeChunk(map[string]any{}, "stop"); err != nil {
+			return err
+		}
+		if pendingUsage != nil {
+			if err := writeUsageChunk(pendingUsage); err != nil {
+				return err
+			}
+			pendingUsage = nil
+		}
 		return writeDONE()
 	}
 	return nil
